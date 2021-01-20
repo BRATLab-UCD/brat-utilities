@@ -9,7 +9,7 @@ from .unpack_json import get_keys_from_json
 # def make_dummy_data(N, n_delay=32, n_angle=32, n_channels=2, data_format="channels_first"):
 #     """ make dummy CSI data for proving out different functions """
 
-def make_ar_data(data, p, n_chan=2, n_delay=32, n_angle=32, batch_factor=None, mode="matrix", stride=1):
+def make_ar_data(data, p, n_chan=2, n_delay=32, n_angle=32, batch_factor=None, mode="matrix", stride=1, stack=0, backwards=True):
     """
     make time-series of p-length inputs and one-step ahead outputs for vector autoregression
 
@@ -36,10 +36,20 @@ def make_ar_data(data, p, n_chan=2, n_delay=32, n_angle=32, batch_factor=None, m
           "angular_corr" -- same premise as 'angular' using empirical correlation matrices 
     stride: int
             increment of AR process steps; (H_0, H_{stride}, ... H_{stride*(p-1)}) to predict H_{stride*p}
+    stack: int
+           offset index of current stack -- use to grab different subsequences from the same sequence 
+    backwards: bool
+               If True, then predict last timeslot (y) based on previous p timeslots (Z)
+               If False, then p+1-th timeslot (y) based on first p timeslots (Z)
     """
+
     img_total = n_chan*n_delay*n_angle
     T = data.shape[1]
-    assert(p*stride < T)
+    e_i = T-1-stack
+    assert(stack+p*stride < T)
+    # print(f"--- Z_idx: {[i for i in range(e_i-p*stride,e_i,stride)]} , y_idx: {e_i}---")
+    # TODO: add stack to other modes
+    # TODO: add end-indexing to other modes
     if mode == "matrix":
         Z = np.reshape(data[:,:p*stride:stride,:], (data.shape[0], p*img_total))
         y = data[:,p*stride,:]
@@ -58,12 +68,19 @@ def make_ar_data(data, p, n_chan=2, n_delay=32, n_angle=32, batch_factor=None, m
         #     Z = np.reshape(np.transpose(Z, (0,2,1,3)), (data.shape[0]*n_delay, p, 2*n_angle))
         #     y = np.reshape(combine_complex(np.expand_dims(data[:,p,:], axis=1), n_delay, n_angle), (data.shape[0]*n_delay,2*n_angle))
     elif mode == "angular_corr_vect":
-        Z = np.reshape(combine_complex(data[:,:p*stride:stride,:], n_delay, n_angle), (data.shape[0],p,n_delay,n_angle))
+        Z = np.reshape(combine_complex(data[:,stack:stack+p*stride:stride,:], n_delay, n_angle), (data.shape[0],p,n_delay,n_angle))
         Z = np.reshape(np.transpose(Z, (0,2,1,3)), (data.shape[0]*n_delay, p, n_angle))
         y = np.reshape(combine_complex(np.expand_dims(data[:,p*stride,:], axis=1), n_delay, n_angle), (data.shape[0]*n_delay,n_angle))
-    elif mode == "angular_corr":
-        Z = np.reshape(combine_complex(data[:,:p*stride:stride,:], n_delay, n_angle), (data.shape[0],p,n_delay,n_angle))
-        y = np.reshape(combine_complex(np.expand_dims(data[:,p*stride,:], axis=1), n_delay, n_angle), (data.shape[0],n_delay,n_angle))
+    elif mode == "angular_corr" or mode == "multivar_lls":
+        # Z = np.reshape(combine_complex(data[:,stack:stack+p*stride:stride,:], n_delay, n_angle), (data.shape[0],p,n_delay,n_angle))
+        # y = np.reshape(combine_complex(np.expand_dims(data[:,stack+p*stride,:], axis=1), n_delay, n_angle), (data.shape[0],n_delay,n_angle))
+        # (T-stack)-p*stride:(T-stack)+1:stride
+        if backwards:
+            Z = np.reshape(combine_complex(data[:,e_i-p*stride:e_i:stride,:], n_angle, n_delay, n_chan=n_chan), (data.shape[0],p,n_delay,n_angle))
+            y = np.reshape(combine_complex(np.expand_dims(data[:,e_i,:], axis=1), n_angle, n_delay, n_chan=n_chan), (data.shape[0],n_angle,n_delay))
+        else:
+            Z = np.reshape(combine_complex(data[:,:p*stride:stride,:], n_angle, n_delay, n_chan=n_chan), (data.shape[0],p,n_angle,n_delay))
+            y = np.reshape(combine_complex(np.expand_dims(data[:,p*stride,:], axis=1),n_angle, n_delay, n_chan=n_chan), (data.shape[0],n_angle,n_delay))
     if batch_factor != None:
         Z = subsample_batches(Z, batch_factor=batch_factor)
         y = subsample_batches(y, batch_factor=batch_factor)
@@ -83,17 +100,20 @@ def add_batch(data_down, batch, type_str, T, img_channels, img_height, img_width
     else:
         return np.vstack((data_down,x_down[:,:,:n_truncate,:])) if img_channels > 0 else np.vstack((data_down,truncate_flattened_matrix(x_down, img_height, img_width, n_truncate)))
 
-def split_complex(data,mode=0):
-    if mode == 0:
-        # default behavior
-        re = np.expand_dims(np.real(data).astype('float32'),axis=2) # real portion
-        im = np.expand_dims(np.imag(data).astype('float32'),axis=2) # imag portion
-        return np.concatenate((re,im),axis=2)
-    if mode == 1:
-        # written for angular_corr
-        re = np.real(data).astype('float32') # real portion
-        im = np.imag(data).astype('float32') # imag portion
-        return np.concatenate((re,im),axis=1)
+def split_complex(data,mode=0,T=10):
+    if T > 1:
+        if mode == 0:
+            # default behavior
+            re = np.expand_dims(np.real(data).astype('float32'),axis=2) # real portion
+            im = np.expand_dims(np.imag(data).astype('float32'),axis=2) # imag portion
+            return np.concatenate((re,im),axis=2)
+        if mode == 1:
+            # written for angular_corr
+            re = np.real(data).astype('float32') # real portion
+            im = np.imag(data).astype('float32') # imag portion
+            return np.concatenate((re,im),axis=1)
+    else:
+        return np.concatenate((np.expand_dims(np.real(data), axis=1), np.expand_dims(np.imag(data), axis=1)), axis=1)
 
 def truncate_flattened_matrix(x, n_delay, n_angle, n_truncate):
     """
@@ -139,8 +159,15 @@ def stack_data(x1, x2):
     # stack two np arrays with identical shape
     return np.vstack(x1, x2)
 
-def combine_complex(data, height, width):
-    return data[:,:,:height*width] + data[:,:,height*width:]*1j
+def combine_complex(data, height=32, width=32, n_chan=0, T=10):
+    assert(n_chan in [0,2])
+    if n_chan == 0:
+        return data[:,:,:height*width] + data[:,:,height*width:]*1j
+    elif n_chan == 2:
+        if len(data.shape) == 5:
+            return data[:,:,0,:,:] + data[:,:,1,:,:]*1j
+        elif len(data.shape) == 4:
+            return data[:,0,:,:] + data[:,1,:,:]*1j
 
 def dataset_pipeline(batch_num, debug_flag, aux_bool, dataset_spec, M_1, img_channels = 2, img_height = 32, img_width = 32, data_format = "channels_first", T = 10, train_argv = True,  merge_val_test = True, quant_config = None, idx_split=0, n_truncate=32, total_num_files=21):
     """
@@ -186,7 +213,7 @@ def dataset_pipeline(batch_num, debug_flag, aux_bool, dataset_spec, M_1, img_cha
         # x_train = subsample_time(x_train,T)
         x_train = x_train.astype('float32')
         if img_channels > 0:
-            x_train = np.reshape(x_train, get_data_shape(len(x_train), T, img_channels, n_truncate, img_width, data_format))  # adapt this if using `channels_first` image data format
+            x_train = np.reshape(x_train, get_data_shape(len(x_train), T, img_channels, img_height, n_truncate, data_format))  # adapt this if using `channels_first` image data format
         if aux_bool:
             aux_train = np.zeros((len(x_train),M_1))
 
@@ -197,8 +224,8 @@ def dataset_pipeline(batch_num, debug_flag, aux_bool, dataset_spec, M_1, img_cha
     x_test = x_test.astype('float32')
 
     if img_channels > 0:
-        x_val = np.reshape(x_val, get_data_shape(len(x_val), T, img_channels, n_truncate, img_width, data_format))  # adapt this if using `channels_first` image data format
-        x_test = np.reshape(x_test, get_data_shape(len(x_test), T, img_channels, n_truncate, img_width, data_format))  # adapt this if using `channels_first` image data format
+        x_val = np.reshape(x_val, get_data_shape(len(x_val), T, img_channels, img_height, n_truncate, data_format))  # adapt this if using `channels_first` image data format
+        x_test = np.reshape(x_test, get_data_shape(len(x_test), T, img_channels, img_height, n_truncate, data_format))  # adapt this if using `channels_first` image data format
 
     if aux_bool:
         aux_val = np.zeros((len(x_val),M_1)).astype('float32')
