@@ -1,8 +1,6 @@
 # NMSE_performance.py
 from .unpack_json import *
 import scipy.io as sio
-import matplotlib.pyplot as plt
-import matplotlib
 import numpy as np
 import pickle
 import math
@@ -134,6 +132,7 @@ def renorm_sphH4(data, minmax_file, t1_power_file, batch_num, link_type='down', 
 
 # calculate NMSE
 def calc_NMSE(x_hat,x_test,T=3,diff_test=None):
+    results = {}
     if T == 1:
         x_test_temp =  np.reshape(x_test, (len(x_test), -1))
         x_hat_temp =  np.reshape(x_hat, (len(x_hat), -1))
@@ -146,13 +145,16 @@ def calc_NMSE(x_hat,x_test,T=3,diff_test=None):
     # mse = mse[np.nonzero(power)] 
     # power = power[np.nonzero(power)] 
     # temp = mse[np.nonzero(power)] / power[np.nonzero(power)]
-    print("Average Truncated NMSE is {}".format(10*math.log10(np.mean(temp))))
+    results["avg_truncated"] = 10*math.log10(np.mean(temp))
+    print("Average Truncated NMSE is {}".format(results["avg_truncated"]))
     if type(diff_test) != type(None):
         power += diff_test
         mse += diff_test
         # temp = mse[np.nonzero(power)] / power[np.nonzero(power)]
         temp = mse/power
-        print("Average Full NMSE is {}".format(10*math.log10(np.mean(temp))))
+        results["avg_full"] = 10*math.log10(np.mean(temp))
+        print("Average Full NMSE is {}".format(results["avg_full"]))
+    # TODO: return results for all timeslots
     if T != 1:
         for t in range(T):
             x_test_temp =  np.reshape(x_test[:, t, :, :, :], (len(x_test[:, t, :, :, :]), -1))
@@ -163,6 +165,7 @@ def calc_NMSE(x_hat,x_test,T=3,diff_test=None):
             power = power[np.nonzero(power)] 
             temp = mse/power
             print("NMSE at t{} is {}".format(t+1, 10*math.log10(np.mean(temp))))
+    return results
 
 # method 1: return NMSE for single timeslot
 # def get_NMSE(x_hat, x_test, return_mse=False):
