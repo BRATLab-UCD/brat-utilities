@@ -11,7 +11,25 @@ from utils.NMSE_performance import get_NMSE, denorm_H3, denorm_H4, denorm_sphH4
 from utils.data_tools import dataset_pipeline, subsample_batches, split_complex
 from utils.unpack_json import get_keys_from_json
 
-def fit(model, train_ldr, valid_ldr, batch_num, criterion=nn.MSELoss(), epochs=10, timers=None, json_config=None, debug_flag=True, pickle_dir="."):
+from prettytable import PrettyTable
+
+def count_parameters(model):
+    """
+    count trainable params in model
+    from Vlad Rusu's SO answer: https://stackoverflow.com/a/62508086
+    """
+    table = PrettyTable(["Modules", "Parameters"])
+    total_params = 0
+    for name, parameter in model.named_parameters():
+        if not parameter.requires_grad: continue
+        param = parameter.numel()
+        table.add_row([name, param])
+        total_params+=param
+    print(table)
+    print(f"Total Trainable Params: {total_params}")
+    return total_params
+
+def fit(model, train_ldr, valid_ldr, batch_num, schedule=None, criterion=nn.MSELoss(), epochs=10, timers=None, json_config=None, debug_flag=True, pickle_dir=".", input_type="split"):
     # pull out timers
     fit_timer = timers["fit_timer"] 
 
@@ -19,7 +37,13 @@ def fit(model, train_ldr, valid_ldr, batch_num, criterion=nn.MSELoss(), epochs=1
     lr, network_name = get_keys_from_json(json_config, keys=["learning_rate", "network_name"])
 
     # criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    # TODO: if we use lr_schedule, then do we need to use SGD instead? 
+    lr = lr if schedule == None else 1
+    optimizer = optim.SGD(model.parameters(), lr=lr)
+    if schedule != None:
+        lr_lambda = lambda epoch: schedule.get_param(epoch) 
+        lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, [lr_lambda], verbose=True)
+    # optimizer = optim.Adam(model.parameters(), lr=lr)
     # TODO: Load in epoch
     checkpoint = {
                     "latest_model": None,
@@ -104,6 +128,10 @@ def fit(model, train_ldr, valid_ldr, batch_num, criterion=nn.MSELoss(), epochs=1
                 #     print(f"Epoch #{epoch+1}/{epochs}: Test loss: {history['test_loss'][epoch]:.5E}. Grace period is {grace_period} epochs.")
                 checkpoint["latest_model"] = copy.deepcopy(model).to("cpu").state_dict()
                 tqdm.write(f"Epoch #{epoch+1}/{epochs}: Training loss: {history['train_loss'][epoch]:.5E} -- Test loss: {history['test_loss'][epoch]:.5E}")
+
+                if schedule != None:
+                    lr_scheduler.step()
+                    print(lr_scheduler.state_dict())
 
     return [model, checkpoint, history, optimizer, timers]
 

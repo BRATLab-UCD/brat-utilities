@@ -153,7 +153,7 @@ def subsample_batches(data,batch_factor=10):
     return data
 
 def batch_str(base,num):
-        return base+'_'+str(num)+'.mat'
+        return base+str(num)+'.mat'
 
 def stack_data(x1, x2):
     # stack two np arrays with identical shape
@@ -172,6 +172,7 @@ def combine_complex(data, height=32, width=32, n_chan=0, T=10):
 def dataset_pipeline(batch_num, debug_flag, aux_bool, dataset_spec, M_1, img_channels = 2, img_height = 32, img_width = 32, data_format = "channels_first", T = 10, train_argv = True,  merge_val_test = True, quant_config = None, idx_split=0, n_truncate=32, total_num_files=21):
     """
     Load and split dataset according to arguments
+    Assumes batch-wise splits (i.e., concatenating along axis=0)
     Returns: [data_train, data_val, data_test]
     """
     print(f"aux_bool: {aux_bool}")
@@ -258,7 +259,114 @@ def dataset_pipeline(batch_num, debug_flag, aux_bool, dataset_spec, M_1, img_cha
     if (not train_argv):
         data_train = None
 
+    # if img_channels > 0:
+    #     return data_train[:,:,:n_truncate,:], data_val[:,:,:n_truncate,:], data_test[:,:,:n_truncate,:]
+    # else:
+    return data_train, data_val, data_test
+
+def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, M_1, img_channels = 2, img_height = 32, img_width = 32, data_format = "channels_first", T = 10, train_argv = True,  merge_val_test = True, quant_config = None, idx_split=0, n_truncate=32, total_num_files=21):
+    """
+    Load and split dataset according to arguments
+    Assumes timeslot splits (i.e., concatenating along axis=1)
+    Returns: [data_train, data_val, data_test]
+    """
+    x_train = x_train_up = x_val = x_val_up = x_test = x_test_up = None
+
+    train_str = dataset_spec[0]
+    val_str = dataset_spec[1]
+    if len(dataset_spec) ==3:
+        test_str = dataset_spec[2]
+
+    for timeslot in range(1,T+1):
+        print("--- Adding batch #{} ---".format(timeslot))
+        if train_argv:
+            mat = sio.loadmat(batch_str(train_str,timeslot))
+            x_train  = add_batch_col(x_train, mat, 'train', T, img_channels, img_height, img_width, data_format, n_truncate)
+        mat = sio.loadmat(batch_str(val_str,timeslot))
+        x_val  = add_batch_col(x_val, mat, 'val', T, img_channels, img_height, img_width, data_format, n_truncate)
+        if len(dataset_spec) == 3:
+            mat = sio.loadmat(batch_str(test_str,timeslot))
+            x_test  = add_batch_col(x_test, mat, 'test', T, img_channels, img_height, img_width, data_format, n_truncate)
+
+    if len(dataset_spec) < 3:
+        x_test = x_val
+        x_test_up = x_val_up
+
+    # bundle training data calls so they are skippable
+    if train_argv:
+        # x_train = subsample_time(x_train,T)
+        x_train = x_train.astype('float32')
+        if img_channels > 0:
+            x_train = np.reshape(x_train, get_data_shape(len(x_train), T, img_channels, img_height, n_truncate, data_format))  # adapt this if using `channels_first` image data format
+        if aux_bool:
+            aux_train = np.zeros((len(x_train),M_1))
+
+    # x_val = subsample_time(x_val,T)
+    # x_test = subsample_time(x_test,T)
+
+    x_val = x_val.astype('float32')
+    x_test = x_test.astype('float32')
+
     if img_channels > 0:
-        return data_train[:,:,:n_truncate,:], data_val[:,:,:n_truncate,:], data_test[:,:,:n_truncate,:]
+        x_val = np.reshape(x_val, get_data_shape(len(x_val), T, img_channels, img_height, n_truncate, data_format))  # adapt this if using `channels_first` image data format
+        x_test = np.reshape(x_test, get_data_shape(len(x_test), T, img_channels, img_height, n_truncate, data_format))  # adapt this if using `channels_first` image data format
+
+    if aux_bool:
+        aux_val = np.zeros((len(x_val),M_1)).astype('float32')
+        aux_test = np.zeros((len(x_test),M_1)).astype('float32')
+
+    if (merge_val_test):
+        # merge validation and test sets
+
+        if aux_bool:
+            aux_val  = np.vstack((aux_val, aux_test))
+            aux_test = aux_val
+        x_val  = np.vstack((x_val, x_test))
+        x_test = x_val
+
+    # concat and (optionally) quantize data
+    # TODO: Re-validate. Changed since last run of quantized CSI. 
+    quant_bool = type(quant_config) != type(None)
+    if quant_bool:
+        val_min, val_max, bits = get_keys_from_json(quant_config, keys=['val_min','val_max','bits'])
+    if train_argv:
+        data_train = x_train if not quant_bool else quantize(x_train,val_min,val_max,bits) 
+    data_val = x_val if not quant_bool else quantize(x_val,val_min,val_max,bits) 
+    data_test = x_test if not quant_bool else quantize(x_test,val_min,val_max,bits) 
+    if aux_bool:
+        if train_argv:
+            data_train = [aux_train, data_train]
+        data_val = [aux_val, data_test]
+        data_test = [aux_test, data_test]
+
+    if (not train_argv):
+        data_train = None
+
+    # if img_channels > 0:
+    #     return data_train[:,:,:n_truncate,:], data_val[:,:,:n_truncate,:], data_test[:,:,:n_truncate,:]
+    # else:
+    return data_train, data_val, data_test
+
+def add_batch_col(data_down, batch, type_str, T, img_channels, img_height, img_width, data_format, n_truncate):
+    # concatenate batch data along time axis 
+    # Inputs:
+    # -> data_up = np.array for uplink
+    # -> data_down = np.array for downlink
+    # -> batch = mat file to add to np.array
+    # -> type_str = part of key to select for training/validation
+    # x = batch['HD_{}'.format(type_str)]    
+    x = batch['T1_{}_norm'.format(type_str)]    
+    # x = np.reshape(x[:,:T,:], get_data_shape(len(x), T, img_channels, img_height, img_width, data_format))
+    x = np.expand_dims(x, 1)
+    print(f"x.shape: {x.shape}")
+    if data_down is None:
+        return x[:,:,:,:n_truncate] if img_channels > 0 else truncate_flattened_matrix(x, img_height, img_width, n_truncate)
     else:
-        return data_train, data_val, data_test
+        return np.concatenate((data_down,x[:,:,:n_truncate,:]), axis=1) if img_channels > 0 else np.concatenate((data_down,truncate_flattened_matrix(x, img_height, img_width, n_truncate)), axis=1)
+
+def load_pow_diff(diff_spec,T=1):
+    # TODO: load data for T > 1
+    pow_diff_val = sio.loadmat(f"{diff_spec[0]}1.mat")["Pow_val"]
+    pow_diff_test = sio.loadmat(f"{diff_spec[1]}1.mat")["Pow_test"]
+    pow_diff = np.squeeze(np.vstack((pow_diff_val, pow_diff_test)))
+    return pow_diff
