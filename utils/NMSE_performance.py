@@ -133,7 +133,7 @@ def renorm_sphH4(data, minmax_file, t1_power_file, batch_num, link_type='down', 
     return data
 
 # calculate NMSE
-def calc_NMSE(x_hat,x_test,T=3):
+def calc_NMSE(x_hat,x_test,T=3,diff_test=None):
     if T == 1:
         x_test_temp =  np.reshape(x_test, (len(x_test), -1))
         x_hat_temp =  np.reshape(x_hat, (len(x_hat), -1))
@@ -142,10 +142,17 @@ def calc_NMSE(x_hat,x_test,T=3):
         x_hat_temp =  np.reshape(x_hat[:, :, :, :, :], (len(x_hat), -1))
     power = np.sum(abs(x_test_temp)**2, axis=1)
     mse = np.sum(abs(x_test_temp-x_hat_temp)**2, axis=1)
-    mse = mse[np.nonzero(power)] 
-    power = power[np.nonzero(power)] 
     temp = mse/power
-    print("Overall NMSE is {}".format(10*math.log10(np.mean(temp))))
+    # mse = mse[np.nonzero(power)] 
+    # power = power[np.nonzero(power)] 
+    # temp = mse[np.nonzero(power)] / power[np.nonzero(power)]
+    print("Average Truncated NMSE is {}".format(10*math.log10(np.mean(temp))))
+    if type(diff_test) != type(None):
+        power += diff_test
+        mse += diff_test
+        # temp = mse[np.nonzero(power)] / power[np.nonzero(power)]
+        temp = mse/power
+        print("Average Full NMSE is {}".format(10*math.log10(np.mean(temp))))
     if T != 1:
         for t in range(T):
             x_test_temp =  np.reshape(x_test[:, t, :, :, :], (len(x_test[:, t, :, :, :]), -1))
@@ -200,31 +207,6 @@ def get_NMSE(x_hat, x_test, n_del=32, n_ang=32, return_mse=False):
         return [np.real(mse), nmse]
     else:
         return nmse
-
-def plot_complex_residuals(x_hat, x_test, n_del=32, n_ang=32, fig_title=None):
-    cm = matplotlib.cm.cool
-
-    x_err = np.mean(np.reshape(x_test - x_hat, (x_test.shape[0], n_del*n_ang)), axis=1)
-    x_re, x_im = np.real(x_err), np.imag(x_err)
-    x_re_max, x_im_max = np.max(np.abs(x_re)), np.max(np.abs(x_im))
-    origin = ([0]*x_hat.shape[0], [0]*x_hat.shape[0])
-
-    fig, ax = plt.subplots()
-    q = ax.quiver(*origin, x_re, x_im, angles='xy', scale_units='xy', scale=1, cmap=cm, alpha=0.1)
-    ax.set_xlim([-x_re_max,x_re_max])
-    ax.set_ylim([-x_im_max,x_im_max])
-    if fig_title != None:
-        ax.set_title(f"{fig_title} (mean=({np.mean(x_re):.3E}, {np.mean(x_im):.3E}j)")
-        plt.savefig(f"fig/residuals/{fig_title}.png")
-
-    # mse histogram
-    x_err = np.reshape(x_test - x_hat, (x_test.shape[0], n_del*n_ang))
-    mse = np.real(np.mean(np.conj(x_err)*x_err, axis=1))
-    fig, ax = plt.subplots()
-    ax.hist(mse, bins=20)
-    if fig_title != None:
-        ax.set_title(f"{fig_title}")
-        plt.savefig(f"fig/mse_hist/{fig_title}.png")
 
 # calculate rms for a window of a signal
 def calc_rms(x, window, idx):
