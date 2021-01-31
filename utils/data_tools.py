@@ -265,7 +265,7 @@ def dataset_pipeline(batch_num, debug_flag, aux_bool, dataset_spec, M_1, img_cha
     # else:
     return data_train, data_val, data_test
 
-def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, M_1, img_channels = 2, img_height = 32, img_width = 32, data_format = "channels_first", T = 10, train_argv = True,  merge_val_test = True, quant_config = None, idx_split=0, n_truncate=32, total_num_files=21):
+def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, M_1, img_channels = 2, img_height = 32, img_width = 32, data_format = "channels_first", T = 10, train_argv = True, quant_config = None, idx_split=0, n_truncate=32, total_num_files=21):
     """
     Load and split dataset according to arguments
     Assumes timeslot splits (i.e., concatenating along axis=1)
