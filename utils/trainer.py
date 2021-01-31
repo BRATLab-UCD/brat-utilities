@@ -39,11 +39,11 @@ def fit(model, train_ldr, valid_ldr, batch_num, schedule=None, criterion=nn.MSEL
     # criterion = nn.MSELoss()
     # TODO: if we use lr_schedule, then do we need to use SGD instead? 
     lr = lr if schedule == None else 1
-    optimizer = optim.SGD(model.parameters(), lr=lr)
-    if schedule != None:
-        lr_lambda = lambda epoch: schedule.get_param(epoch) 
-        lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, [lr_lambda], verbose=True)
-    # optimizer = optim.Adam(model.parameters(), lr=lr)
+    # optimizer = optim.SGD(model.parameters(), lr=lr)
+    # if schedule != None:
+    #     lr_lambda = lambda epoch: schedule.get_param(epoch) 
+    #     lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, [lr_lambda], verbose=True)
+    optimizer = optim.Adam(model.parameters(), lr=lr)
     # TODO: Load in epoch
     checkpoint = {
                     "latest_model": None,
@@ -61,6 +61,7 @@ def fit(model, train_ldr, valid_ldr, batch_num, schedule=None, criterion=nn.MSEL
                 }
     l = None
     best_test_loss = None
+    # patience = 200
     patience = 200
     epochs_no_improvement = 0
     # grace_period = 1000
@@ -72,12 +73,19 @@ def fit(model, train_ldr, valid_ldr, batch_num, schedule=None, criterion=nn.MSEL
         for epoch in range(epochs):
             train_loss = 0
             model.training = True
-            for i, data_batch in enumerate(tqdm(train_ldr, desc=f"Epoch #{epoch+1}"), 0):
+            # for i, data_batch in enumerate(tqdm(train_ldr, desc=f"Epoch #{epoch+1}"), 0):
+            for i, data_tuple in enumerate(tqdm(train_ldr, desc=f"Epoch #{epoch+1}"), 0):
                 # inputs = autograd.Variable(data_batch).float()
-                inputs = autograd.Variable(data_batch)
+                if len(data_tuple) == 1:
+                    data_batch = data_tuple
+                elif len(data_tuple) == 2:
+                    aux_batch, data_batch = data_tuple
+                    aux_input = autograd.Variable(aux_batch)
+                h_input = autograd.Variable(data_batch)
                 optimizer.zero_grad()
-                dec = model(inputs)
-                mse = criterion(dec, inputs)
+                model_in = h_input if len(data_tuple) == 1 else [aux_input, h_input]
+                dec = model(model_in)
+                mse = criterion(dec, h_input)
                 train_loss += mse
                 mse.backward()
                 # torch.nn.utils.clip_grad_norm_(model.parameters(), clip_val) # clip
@@ -99,12 +107,19 @@ def fit(model, train_ldr, valid_ldr, batch_num, schedule=None, criterion=nn.MSEL
             # model.training = False # optionally check just the MSE performance during eval
             with torch.no_grad():
                 test_loss = 0
-                for i, data_batch in enumerate(valid_ldr):
+                # for i, data_batch in enumerate(valid_ldr):
+                for i, data_tuple in enumerate(valid_ldr):
                     # inputs = autograd.Variable(data_batch).float()
-                    inputs = autograd.Variable(data_batch)
+                    if len(data_tuple) == 1:
+                        data_batch = data_tuple
+                    elif len(data_tuple) == 2:
+                        aux_batch, data_batch = data_tuple
+                        aux_input = autograd.Variable(aux_batch)
+                    h_input = autograd.Variable(data_batch)
                     optimizer.zero_grad()
-                    dec = model(inputs)
-                    mse = criterion(dec, inputs)
+                    model_in = h_input if len(data_tuple) == 1 else [aux_input, h_input]
+                    dec = model(model_in)
+                    mse = criterion(dec, h_input)
                     test_loss += mse
                 history["test_loss"][epoch] = test_loss.detach().to("cpu").numpy() / (i+1)
                 # if epoch >= grace_period:
@@ -113,6 +128,8 @@ def fit(model, train_ldr, valid_ldr, batch_num, schedule=None, criterion=nn.MSEL
                     checkpoint["best_epoch"] = epoch
                     checkpoint["best_model"] = copy.deepcopy(model).to("cpu").state_dict()
                     epochs_no_improvement = 0
+                    if not debug_flag:
+                        torch.save(checkpoint["best_model"], f"{pickle_dir}/{network_name}-best-model.pt")
                     print(f"Epoch #{epoch+1}/{epochs}: Test loss: {history['test_loss'][epoch]:.5E} -- New best epoch: {epoch+1}")
                 elif epochs_no_improvement < patience:
                     epochs_no_improvement += 1
@@ -145,7 +162,7 @@ def score(model, valid_ldr, data_test, batch_num, checkpoint, history, optimizer
     predict_timer = timers["predict_timer"]
     score_timer = timers["score_timer"]
 
-    batch_size, minmax_file, norm_range, network_name, base_pickle = get_keys_from_json(json_config, keys=["batch_size", "minmax_file", "norm_range", "network_name", "base_pickle"])
+    batch_size, minmax_file, norm_range = get_keys_from_json(json_config, keys=["batch_size", "minmax_file", "norm_range"])
 
     with predict_timer:
         # y_hat = torch.zeros(data_test.shape).to(device)
@@ -155,14 +172,23 @@ def score(model, valid_ldr, data_test, batch_num, checkpoint, history, optimizer
         with torch.no_grad():
             y_hat = torch.zeros(data_test.shape, dtype=torch_type).to("cpu")
             y_test = torch.zeros(data_test.shape, dtype=torch_type).to("cpu")
-            for i, data_batch in enumerate(valid_ldr):
+            for i, data_tuple in enumerate(valid_ldr):
                 # inputs = autograd.Variable(data_batch).float()
-                inputs = autograd.Variable(data_batch)
+                if len(data_tuple) == 1:
+                    data_batch = data_tuple
+                elif len(data_tuple) == 2:
+                    aux_batch, data_batch = data_tuple
+                    aux_input = autograd.Variable(aux_batch)
+                h_input = autograd.Variable(data_batch)
+                model_in = h_input if len(data_tuple) == 1 else [aux_input, h_input]
+            # for i, data_batch in enumerate(valid_ldr):
+            #     # inputs = autograd.Variable(data_batch).float()
+            #     inputs = autograd.Variable(data_batch)
                 optimizer.zero_grad()
                 idx_s = i*batch_size
                 idx_e = min((i+1)*batch_size, y_hat.shape[0])
-                y_hat[idx_s:idx_e,:,:,:] = model(inputs).to("cpu")
-                y_test[idx_s:idx_e,:,:,:] = inputs.to("cpu")
+                y_hat[idx_s:idx_e,:,:,:] = model(model_in).to("cpu")
+                y_test[idx_s:idx_e,:,:,:] = h_input.to("cpu")
 
     # for markovnet, we add "addend" to the error to get our actual estimates
     if type(err_dict) != type(None):            
