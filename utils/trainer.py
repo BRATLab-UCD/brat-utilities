@@ -8,7 +8,7 @@ from torch import nn, optim, autograd
 
 sys.path.append("/home/mdelrosa/git/brat")
 from utils.NMSE_performance import get_NMSE, denorm_H3, denorm_H4, denorm_sphH4
-from utils.data_tools import dataset_pipeline, subsample_batches, split_complex
+from utils.data_tools import dataset_pipeline, subsample_batches, split_complex, load_pow_diff
 from utils.unpack_json import get_keys_from_json
 
 from prettytable import PrettyTable
@@ -54,7 +54,7 @@ def fit(model, train_ldr, valid_ldr, batch_num, schedule=None, criterion=nn.MSEL
                     "best_nmse": None,
                     # "optimizer_state": None,
     }
-    optimizer_state = None
+
     history = {
                     "train_loss": np.zeros(epochs),
                     "test_loss": np.zeros(epochs)
@@ -152,7 +152,7 @@ def fit(model, train_ldr, valid_ldr, batch_num, schedule=None, criterion=nn.MSEL
 
     return [model, checkpoint, history, optimizer, timers]
 
-def score(model, valid_ldr, data_test, batch_num, checkpoint, history, optimizer, timeslot=0, err_dict=None, timers=None, json_config=None, debug_flag=True, str_mod="", torch_type=torch.float):
+def score(model, valid_ldr, data_test, batch_num, checkpoint, history, optimizer, timeslot=0, err_dict=None, timers=None, json_config=None, debug_flag=True, str_mod="", torch_type=torch.float, diff_spec=[]):
     """
     take model, predict on valid_ldr, score
     currently scores a spherically normalized dataset
@@ -220,10 +220,16 @@ def score(model, valid_ldr, data_test, batch_num, checkpoint, history, optimizer
         y_test_denorm = y_test_denorm[:,0,:,:] + 1j*y_test_denorm[:,1,:,:]
         y_shape = y_test_denorm.shape
         mse, nmse = get_NMSE(y_hat_denorm, y_test_denorm, return_mse=True, n_ang=y_shape[1], n_del=y_shape[2]) # one-step prediction -> estimate of single timeslot
-        print(f"-> {str_mod} NMSE = {nmse:5.3f} | MSE = {mse:.4E}")
-
+        print(f"-> {str_mod} Truncated NMSE = {nmse:5.3f} | MSE = {mse:.4E}")
         checkpoint["best_nmse"] = nmse
         checkpoint["best_mse"] = mse
+
+        if len(diff_spec) != 0: 
+            pow_diff = load_pow_diff(diff_spec)
+            mse, nmse = get_NMSE(y_hat_denorm, y_test_denorm, return_mse=True, n_ang=y_shape[1], n_del=y_shape[2], pow_diff_timeslot=pow_diff) # one-step prediction -> estimate of single timeslot
+            print(f"-> {str_mod} Full NMSE = {nmse:5.3f} | MSE = {mse:.4E}")
+            checkpoint["best_nmse_full"] = nmse
+            checkpoint["best_mse_full"] = mse
 
     return checkpoint
 
@@ -280,3 +286,20 @@ def save_checkpoint_history(checkpoint, history, optimizer, dir=".", network_nam
             f.close()
     torch.save(optimizer_state, "{}/{}-optimizer.pt".format(dir,network_name))
     torch.save(checkpoint["latest_model"], "{}/{}-model.pt".format(dir,network_name))
+
+def load_checkpoint_history(dir, model, optimizer_obj=optim.Adam, network_name="network_name"):
+    # save checkpoint, history, optimizer from training
+    optimizer = optimizer_obj(model.parameters())
+    pickle_objects = {}
+    for filename, extension in [("checkpoint", ".pkl"), ("history", ".pkl"), ("optimizer", ".pt")]:
+        pickle_file = "{}/{}-{}{}".format(dir,network_name,filename,extension)
+        if extension == ".pkl":
+            with open(pickle_file, "rb") as f:
+                pickle_objects[filename] = pickle.load(f)
+                f.close()
+        elif extension == ".pt":
+            pickle_objects[filename] = torch.load(pickle_file)
+    checkpoint, history, optimizer_state = pickle_objects["checkpoint"], pickle_objects["history"], pickle_objects["optimizer"]
+    optimizer.load_state_dict(optimizer_state)
+    model = model.load_state_dict(checkpoint["best_model"])
+    return [model, checkpoint, history, optimizer]
