@@ -184,7 +184,7 @@ def calc_NMSE(x_hat,x_test,T=3,diff_test=None):
 #         return nmse
 
 # method 2: use trace of error matrix
-def get_NMSE(x_hat, x_test, n_del=32, n_ang=32, return_mse=False):
+def get_NMSE(x_hat, x_test, n_del=32, n_ang=32, return_mse=False, pow_diff_timeslot=None):
     """
     return NMSE in dB. optionally return MSE
     reshape based on delay/angle counts
@@ -201,9 +201,10 @@ def get_NMSE(x_hat, x_test, n_del=32, n_ang=32, return_mse=False):
     nmse = 0
     N = x_err.shape[0]
     for i in range(N):
+        pow_diff = 0 if type(pow_diff_timeslot) == type(None) else pow_diff_timeslot[i]
         tr_term = np.trace(np.matmul(x_err[i,:,:],np.conj(x_err[i,:,:].T)))
         mse += tr_term / N
-        nmse += tr_term / (np.real(power[i])*N)
+        nmse += (tr_term + pow_diff) / ((np.real(power[i]) + pow_diff)*N)
     nmse =  10*math.log10(nmse)
 
     if return_mse:
