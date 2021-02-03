@@ -276,8 +276,9 @@ def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, M_1, img_channels =
     dataset_str, dataset_tail, dataset_key, val_split = dataset_spec
 
     for timeslot in range(1,T+1):
-        print("--- Adding batch #{} ---".format(timeslot))
-        with h5py.File(f"{dataset_str}{timeslot}_{dataset_tail}", 'r') as f:
+        batch_str = f"{dataset_str}{timeslot}_{dataset_tail}"
+        print(f"--- Adding batch #{timeslot} from {batch_str} ---")
+        with h5py.File(batch_str, 'r') as f:
             x_t = np.transpose(f[dataset_key][()], [3,2,1,0])
         # x_t = sio.loadmat(f"{dataset_str}{timeslot}_{dataset_tail}")[dataset_key]
         x_all = add_batch_col(x_all, x_t, img_channels, img_height, img_width, data_format, n_truncate)

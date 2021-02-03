@@ -133,6 +133,7 @@ def renorm_sphH4(data, minmax_file, t1_power_file, batch_num, link_type='down', 
 # calculate NMSE
 def calc_NMSE(x_hat,x_test,T=3,diff_test=None):
     results = {}
+    print(f"--- x_hat.shape: {x_hat.shape} - x_test.shape: {x_test.shape} ---")
     if T == 1:
         x_test_temp =  np.reshape(x_test, (len(x_test), -1))
         x_hat_temp =  np.reshape(x_hat, (len(x_hat), -1))
@@ -141,17 +142,19 @@ def calc_NMSE(x_hat,x_test,T=3,diff_test=None):
         x_hat_temp =  np.reshape(x_hat[:, :, :, :, :], (len(x_hat), -1))
     power = np.sum(abs(x_test_temp)**2, axis=1)
     mse = np.sum(abs(x_test_temp-x_hat_temp)**2, axis=1)
-    temp = mse/power
+    # temp = mse/power
     # mse = mse[np.nonzero(power)] 
     # power = power[np.nonzero(power)] 
-    # temp = mse[np.nonzero(power)] / power[np.nonzero(power)]
+    temp = mse[np.nonzero(power)] / power[np.nonzero(power)]
+    print(f"--- power.shape: {power.shape} - mse.shape: {mse.shape} - temp.shape: {temp.shape} ---")
     results["avg_truncated"] = 10*math.log10(np.mean(temp))
     print("Average Truncated NMSE is {}".format(results["avg_truncated"]))
     if type(diff_test) != type(None):
         power += diff_test
         mse += diff_test
-        # temp = mse[np.nonzero(power)] / power[np.nonzero(power)]
-        temp = mse/power
+        temp = mse[np.nonzero(power)] / power[np.nonzero(power)]
+        print(f"--- power.shape: {power.shape} - mse.shape: {mse.shape} - temp.shape: {temp.shape} ---")
+        # temp = mse/power
         results["avg_full"] = 10*math.log10(np.mean(temp))
         print("Average Full NMSE is {}".format(results["avg_full"]))
     # TODO: return results for all timeslots
