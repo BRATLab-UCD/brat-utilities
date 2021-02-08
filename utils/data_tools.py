@@ -265,27 +265,40 @@ def dataset_pipeline(batch_num, debug_flag, aux_bool, dataset_spec, M_1, img_cha
     # else:
     return data_train, data_val, data_test
 
-def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, M_1, img_channels = 2, img_height = 32, img_width = 32, data_format = "channels_first", T = 10, train_argv = True, quant_config = None, idx_split=0, n_truncate=32, total_num_files=21):
+def dataset_pipeline_complex(debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img_channels = 2, img_height = 32, img_width = 32, data_format = "channels_first", T = 10, train_argv = True, quant_config = None, idx_split=0, n_truncate=32, total_num_files=21, subsample_prop=1.0):
     """
     Load and split dataset according to arguments
     Assumes timeslot splits (i.e., concatenating along axis=1)
-    Returns: [data_train, data_val, data_test]
+    Returns: [data_train, data_val]
     """
-    x_all = x_all_up = None
+    x_all = None
     assert(len(dataset_spec) == 4)
     dataset_str, dataset_tail, dataset_key, val_split = dataset_spec
 
-    for timeslot in range(1,T+1):
-        batch_str = f"{dataset_str}{timeslot}_{dataset_tail}"
-        print(f"--- Adding batch #{timeslot} from {batch_str} ---")
-        with h5py.File(batch_str, 'r') as f:
-            x_t = np.transpose(f[dataset_key][()], [3,2,1,0])
-        # x_t = sio.loadmat(f"{dataset_str}{timeslot}_{dataset_tail}")[dataset_key]
-        x_all = add_batch_col(x_all, x_t, img_channels, img_height, img_width, data_format, n_truncate)
+    for batch in range(1,total_num_files):
+        batch_str = f"{dataset_str}{batch}{dataset_tail}"
+        print(f"--- Adding batch #{batch} from {batch_str} ---")
+        x_t = sio.loadmat(f"{dataset_str}{batch}{dataset_tail}")[dataset_key]
+        x_t = np.concatenate((np.expand_dims(np.real(x_t[:,:T,:,:]), axis=2), np.expand_dims(np.imag(x_t[:,:T,:,:]), axis=2)), axis=2)
+        print(f"-> batch shape: {x_t.shape}")
+        if batch == 1:
+            # np.random.seed(1)
+            batch_size = x_t.shape[0]
+            # rand_idx = np.random.permutation(range(data_size))
+            subsample_idx = int(subsample_prop*batch_size) 
+        if subsample_prop < 1.0:
+            x_t = x_t[(batch-1)*subsample_idx:batch*subsample_idx,:,:,:]
+            # x_t = x_t[rand_idx[(batch-1)*subsample_idx:batch*subsample_idx],:,:,:]
+            # pow_diff = pow_diff[(batch-1)*subsample_idx:batch*subsample_idx]
+        x_all = add_batch_complex(x_all, x_t, n_truncate)
+
+        # pow_all = add_batch_pow(pow_all, pow_diff)
 
     # split to train/val
-    x_train = x_all[:val_split,:,:,:,:]
-    x_val = x_all[val_split:,:,:,:,:]
+    val_idx = int(x_all.shape[0]*val_split) 
+    x_train = x_all[:val_idx,:,:,:,:]
+    x_val = x_all[val_idx:,:,:,:,:]
+    # pow_val = pow_all[val_idx:,:,:]
 
     # bundle training data calls so they are skippable
     if train_argv:
@@ -326,6 +339,91 @@ def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, M_1, img_channels =
     # else:
     return data_train, data_val
 
+def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img_channels = 2, img_height = 32, img_width = 32, data_format = "channels_first", T = 10, train_argv = True, quant_config = None, idx_split=0, n_truncate=32, total_num_files=21, subsample_prop=1.0, thresh_idx_path=None):
+    """
+    Load and split dataset according to arguments
+    Assumes timeslot splits (i.e., concatenating along axis=1)
+    Returns: [data_train, data_val]
+    """
+    x_all  = pow_all = None
+    assert(len(dataset_spec) == 4)
+    dataset_str, dataset_tail, dataset_key, val_split = dataset_spec
+
+    if sample_idx_path != None:
+        with h5py.File(thresh_idx_path, 'r') as f:
+            H_thresh_idx = np.transpose(f['unique_idx'])
+            f.close()
+
+    for timeslot in range(1,T+1):
+        batch_str = f"{dataset_str}{timeslot}_{dataset_tail}"
+        print(f"--- Adding batch #{timeslot} from {batch_str} ---")
+        with h5py.File(batch_str, 'r') as f:
+            x_t = np.transpose(f[dataset_key][()], [3,2,1,0])
+            f.close()
+        # x_t = sio.loadmat(f"{dataset_str}{timeslot}_{dataset_tail}")[dataset_key]
+        pow_diff = load_pow_diff(diff_spec, T=timeslot)
+        if timeslot == 1:
+            # np.random.seed(1)
+            data_size = x_t.shape[0] if thresh_idx_path == None else H_thresh_idx.shape[0]
+            # rand_idx = np.random.permutation(range(data_size))
+            subsample_idx = int(subsample_prop*data_size) 
+        if subsample_prop < 1.0:
+            if thresh_idx_path != None:
+                x_t = x_t[H_thresh_idx]
+                print(f"after thresh_idx: x_t.shape: {x_t.shape}")
+            x_t = x_t[(timeslot-1)*subsample_idx:timeslot*subsample_idx,:,:,:]
+            pow_diff = pow_diff[(timeslot-1)*subsample_idx:timeslot*subsample_idx]
+            # x_t = x_t[rand_idx[(timeslot-1)*subsample_idx:timeslot*subsample_idx],:,:,:]
+            # pow_diff = pow_diff[rand_idx[(timeslot-1)*subsample_idx:timeslot*subsample_idx]]
+        x_all = add_batch_col(x_all, x_t, img_channels, img_height, img_width, data_format, n_truncate)
+
+        pow_all = add_batch_pow(pow_all, pow_diff)
+
+    # split to train/val
+    val_idx = int(x_all.shape[0]*val_split) 
+    x_train = x_all[:val_idx,:,:,:,:]
+    x_val = x_all[val_idx:,:,:,:,:]
+    pow_val = pow_all[val_idx:,:,:]
+
+    # bundle training data calls so they are skippable
+    if train_argv:
+        # x_train = subsample_time(x_train,T)
+        x_train = x_train.astype('float32')
+        if img_channels > 0:
+            x_train = np.reshape(x_train, get_data_shape(len(x_train), T, img_channels, img_height, n_truncate, data_format))  # adapt this if using `channels_first` image data format
+        if aux_bool:
+            aux_train = np.zeros((len(x_train),M_1))
+
+    x_val = x_val.astype('float32')
+
+    if img_channels > 0:
+        x_val = np.reshape(x_val, get_data_shape(len(x_val), T, img_channels, img_height, n_truncate, data_format))  # adapt this if using `channels_first` image data format
+
+    if aux_bool:
+        aux_val = np.zeros((len(x_val),M_1)).astype('float32')
+
+    # concat and (optionally) quantize data
+    # TODO: Re-validate. Changed since last run of quantized CSI. 
+    quant_bool = type(quant_config) != type(None)
+    if quant_bool:
+        val_min, val_max, bits = get_keys_from_json(quant_config, keys=['val_min','val_max','bits'])
+    if train_argv:
+        data_train = x_train if not quant_bool else quantize(x_train,val_min,val_max,bits) 
+
+    data_val = x_val if not quant_bool else quantize(x_val,val_min,val_max,bits) 
+    if aux_bool:
+        if train_argv:
+            data_train = [aux_train, data_train]
+        data_val = [aux_val, data_val]
+
+    if (not train_argv):
+        data_train = None
+
+    # if img_channels > 0:
+    #     return data_train[:,:,:n_truncate,:], data_val[:,:,:n_truncate,:], data_test[:,:,:n_truncate,:]
+    # else:
+    return pow_val, data_train, data_val
+
 def add_batch_col(dataset, batch, img_channels, img_height, img_width, data_format, n_truncate):
     # concatenate batch data along time axis 
     # Inputs:
@@ -337,9 +435,33 @@ def add_batch_col(dataset, batch, img_channels, img_height, img_width, data_form
     else:
         return np.concatenate((dataset, batch[:,:,:,:,:n_truncate]), axis=1) if img_channels > 0 else np.concatenate((dataset,truncate_flattened_matrix(batch, img_height, img_width, n_truncate)), axis=1)
 
+def add_batch_pow(dataset, batch):
+    # concatenate batch data along time axis 
+    # Inputs:
+    # -> dataset = np.array for downlink
+    # -> batch = mat file to add to np.array
+    batch = np.expand_dims(batch, axis=1)
+    if dataset is None:
+        return batch
+    else:
+        return np.concatenate((dataset, batch), axis=1) 
+
 def load_pow_diff(diff_spec,T=1):
     # TODO: load data for T > 1
-    pow_diff_val = sio.loadmat(f"{diff_spec[0]}1.mat")["Pow_val"]
-    pow_diff_test = sio.loadmat(f"{diff_spec[1]}1.mat")["Pow_test"]
-    pow_diff = np.squeeze(np.vstack((pow_diff_val, pow_diff_test)))
+    # pow_diff_val = sio.loadmat(f"{diff_spec[0]}1.mat")["Pow_val"]
+    # pow_diff_test = sio.loadmat(f"{diff_spec[1]}1.mat")["Pow_test"]
+    # pow_diff = np.squeeze(np.vstack((pow_diff_val, pow_diff_test)))
+    pow_diff = sio.loadmat(f"{diff_spec[0]}{T}.mat")["Power_diff"]
     return pow_diff
+
+def add_batch_complex(data_down, batch, n_truncate):
+    # concatenate batch data onto end of data
+    # Inputs:
+    # -> data_up = np.array for uplink
+    # -> data_down = np.array for downlink
+    # -> batch = mat file to add to np.array
+    # -> type_str = part of key to select for training/validation
+    if data_down is None:
+        return batch[:,:,:,:n_truncate,:] 
+    else:
+        return np.vstack((data_down,batch[:,:,:,:n_truncate,:])) 
