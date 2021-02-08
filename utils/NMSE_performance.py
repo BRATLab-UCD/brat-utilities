@@ -131,43 +131,56 @@ def renorm_sphH4(data, minmax_file, t1_power_file, batch_num, link_type='down', 
     return data
 
 # calculate NMSE
-def calc_NMSE(x_hat,x_test,T=3,diff_test=None):
-    results = {}
-    print(f"--- x_hat.shape: {x_hat.shape} - x_test.shape: {x_test.shape} ---")
+def calc_NMSE(x_hat,x_test,T=3,pow_diff=None):
+    results = {
+                "mse_truncated": [0]*T,
+                "nmse_truncated": [0]*T,
+                "mse_full": [0]*T,
+                "nmse_full": [0]*T
+              }
     if T == 1:
         x_test_temp =  np.reshape(x_test, (len(x_test), -1))
         x_hat_temp =  np.reshape(x_hat, (len(x_hat), -1))
+        pow_diff = np.reshape(pow_diff, (pow_diff.shape[0],1)) if type(pow_diff) != type(None) else None
     else:
-        x_test_temp =  np.reshape(x_test[:, :, :, :, :], (len(x_test), -1))
-        x_hat_temp =  np.reshape(x_hat[:, :, :, :, :], (len(x_hat), -1))
+        x_test_temp =  np.reshape(x_test, (x_test.shape[0]*x_test.shape[1], -1))
+        x_hat_temp =  np.reshape(x_hat, (x_hat.shape[0]*x_hat.shape[1], -1))
+        pow_diff_temp = np.reshape(pow_diff, (pow_diff.shape[0]*pow_diff.shape[1],)) if type(pow_diff) != type(None) else None
     power = np.sum(abs(x_test_temp)**2, axis=1)
     mse = np.sum(abs(x_test_temp-x_hat_temp)**2, axis=1)
-    # temp = mse/power
-    # mse = mse[np.nonzero(power)] 
-    # power = power[np.nonzero(power)] 
+    temp = mse/power
+    mse = mse[np.nonzero(power)] 
+    pow_diff_temp = pow_diff_temp[np.nonzero(power)] if type(pow_diff) != type(None) else None
+    power = power[np.nonzero(power)] 
     temp = mse[np.nonzero(power)] / power[np.nonzero(power)]
-    print(f"--- power.shape: {power.shape} - mse.shape: {mse.shape} - temp.shape: {temp.shape} ---")
-    results["avg_truncated"] = 10*math.log10(np.mean(temp))
-    print("Average Truncated NMSE is {}".format(results["avg_truncated"]))
-    if type(diff_test) != type(None):
-        power += diff_test
-        mse += diff_test
-        temp = mse[np.nonzero(power)] / power[np.nonzero(power)]
-        print(f"--- power.shape: {power.shape} - mse.shape: {mse.shape} - temp.shape: {temp.shape} ---")
-        # temp = mse/power
-        results["avg_full"] = 10*math.log10(np.mean(temp))
-        print("Average Full NMSE is {}".format(results["avg_full"]))
-    # TODO: return results for all timeslots
+    results["avg_mse_truncated"] = np.mean(mse)
+    results["avg_nmse_truncated"] = 10*math.log10(np.mean(temp))
+    print(f"Average Truncated | NMSE = {results['avg_nmse_truncated']} | MSE = {results['avg_mse_truncated']:.4E}")
+    if type(pow_diff) != type(None):
+        temp = (mse + pow_diff_temp) / (power + pow_diff_temp)
+        results["avg_mse_full"] = np.mean(mse + pow_diff_temp)
+        results["avg_nmse_full"] = 10*math.log10(np.mean(temp))
+        print(f"Average Full | NMSE = {results['avg_nmse_full']} | MSE = {results['avg_mse_full']:.4E}")
     if T != 1:
         for t in range(T):
             x_test_temp =  np.reshape(x_test[:, t, :, :, :], (len(x_test[:, t, :, :, :]), -1))
             x_hat_temp =  np.reshape(x_hat[:, t, :, :, :], (len(x_hat[:, t, :, :, :]), -1))
+            pow_diff_temp = np.squeeze(pow_diff[:,t,:]) if type(pow_diff) != type(None) else None
             power = np.sum(abs(x_test_temp)**2, axis=1)
             mse = np.sum(abs(x_test_temp-x_hat_temp)**2, axis=1)
             mse = mse[np.nonzero(power)] 
+            pow_diff_temp = pow_diff_temp[np.nonzero(power)] if type(pow_diff) != type(None) else None
             power = power[np.nonzero(power)] 
             temp = mse/power
-            print("NMSE at t{} is {}".format(t+1, 10*math.log10(np.mean(temp))))
+            results["mse_truncated"][t] = np.mean(mse) 
+            results["nmse_truncated"][t] = 10*math.log10(np.mean(temp))
+            if type(pow_diff) != type(None):
+                temp = (mse + pow_diff_temp) / (power + pow_diff_temp)
+                results["mse_full"][t] = np.mean(mse) 
+                results["nmse_full"][t] = 10*math.log10(np.mean(temp))
+                print(f"t{t+1} | Truncated NMSE = {results['nmse_truncated'][t]} | Full NMSE = {results['nmse_full'][t]}")
+            else:
+                print(f"t{t+1} | Truncated NMSE = {results['nmse_truncated'][t]}")
     return results
 
 # method 1: return NMSE for single timeslot
@@ -203,12 +216,17 @@ def get_NMSE(x_hat, x_test, n_del=32, n_ang=32, return_mse=False, pow_diff_times
     mse = 0
     nmse = 0
     N = x_err.shape[0]
+    N_zero = 0
     for i in range(N):
         pow_diff = 0 if type(pow_diff_timeslot) == type(None) else pow_diff_timeslot[i]
         tr_term = np.trace(np.matmul(x_err[i,:,:],np.conj(x_err[i,:,:].T)))
-        mse += tr_term / N
-        nmse += (tr_term + pow_diff) / ((np.real(power[i]) + pow_diff)*N)
-    nmse =  10*math.log10(nmse)
+        if np.real(power[i]) > 0: # ignore term if power is 0
+            mse += tr_term / N
+            nmse += (tr_term + np.real(pow_diff)) / ((np.real(power[i]) + np.real(pow_diff))*N)
+        else:
+            N_zero += 1
+    nmse =  10*math.log10(np.real(nmse))
+    print(f"--- N_zero={N_zero} ---")
 
     if return_mse:
         return [np.real(mse), nmse]
