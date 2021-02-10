@@ -349,7 +349,7 @@ def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img
     assert(len(dataset_spec) == 4)
     dataset_str, dataset_tail, dataset_key, val_split = dataset_spec
 
-    if sample_idx_path != None:
+    if thresh_idx_path != None:
         with h5py.File(thresh_idx_path, 'r') as f:
             H_thresh_idx = np.transpose(f['unique_idx'])
             f.close()
