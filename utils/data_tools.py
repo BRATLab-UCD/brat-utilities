@@ -349,10 +349,9 @@ def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img
     assert(len(dataset_spec) == 4)
     dataset_str, dataset_tail, dataset_key, val_split = dataset_spec
 
-    if sample_idx_path != None:
-        with h5py.File(thresh_idx_path, 'r') as f:
-            H_thresh_idx = np.transpose(f['unique_idx'])
-            f.close()
+    if thresh_idx_path != None:
+        H_thresh_idx = np.squeeze(sio.loadmat(f"{thresh_idx_path}")["i_percent"]) - 1 # subtract one from matlab idx
+        print(f"H_thresh_idx.shape: {H_thresh_idx.shape}\nH_thresh_idx: {H_thresh_idx}")
 
     for timeslot in range(1,T+1):
         batch_str = f"{dataset_str}{timeslot}_{dataset_tail}"
@@ -367,10 +366,11 @@ def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img
             data_size = x_t.shape[0] if thresh_idx_path == None else H_thresh_idx.shape[0]
             # rand_idx = np.random.permutation(range(data_size))
             subsample_idx = int(subsample_prop*data_size) 
+        if thresh_idx_path != None:
+            x_t = x_t[H_thresh_idx]
+            pow_diff = pow_diff[H_thresh_idx] 
+            print(f"after thresh_idx: x_t.shape: {x_t.shape}")
         if subsample_prop < 1.0:
-            if thresh_idx_path != None:
-                x_t = x_t[H_thresh_idx]
-                print(f"after thresh_idx: x_t.shape: {x_t.shape}")
             x_t = x_t[(timeslot-1)*subsample_idx:timeslot*subsample_idx,:,:,:]
             pow_diff = pow_diff[(timeslot-1)*subsample_idx:timeslot*subsample_idx]
             # x_t = x_t[rand_idx[(timeslot-1)*subsample_idx:timeslot*subsample_idx],:,:,:]
