@@ -339,7 +339,7 @@ def dataset_pipeline_complex(debug_flag, aux_bool, dataset_spec, diff_spec, M_1,
     # else:
     return data_train, data_val
 
-def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img_channels = 2, img_height = 32, img_width = 32, data_format = "channels_first", T = 10, train_argv = True, quant_config = None, idx_split=0, n_truncate=32, total_num_files=21, subsample_prop=1.0, thresh_idx_path=None):
+def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img_channels = 2, img_height = 32, img_width = 32, data_format = "channels_first", T = 10, train_argv = True, quant_config = None, idx_split=0, n_truncate=32, total_num_files=21, subsample_prop=1.0, thresh_idx_path=False, stride=1):
     """
     Load and split dataset according to arguments
     Assumes timeslot splits (i.e., concatenating along axis=1)
@@ -349,12 +349,11 @@ def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img
     assert(len(dataset_spec) == 4)
     dataset_str, dataset_tail, dataset_key, val_split = dataset_spec
 
-    if thresh_idx_path != None:
-        with h5py.File(thresh_idx_path, 'r') as f:
-            H_thresh_idx = np.transpose(f['unique_idx'])
-            f.close()
+    if thresh_idx_path != False:
+        H_thresh_idx = np.squeeze(sio.loadmat(f"{thresh_idx_path}")["i_percent"]) - 1 # subtract one from matlab idx
+        print(f"H_thresh_idx.shape: {H_thresh_idx.shape}\nH_thresh_idx: {H_thresh_idx}")
 
-    for timeslot in range(1,T+1):
+    for timeslot in range(1,T*stride+1,stride):
         batch_str = f"{dataset_str}{timeslot}_{dataset_tail}"
         print(f"--- Adding batch #{timeslot} from {batch_str} ---")
         with h5py.File(batch_str, 'r') as f:
@@ -364,13 +363,13 @@ def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img
         pow_diff = load_pow_diff(diff_spec, T=timeslot)
         if timeslot == 1:
             # np.random.seed(1)
-            data_size = x_t.shape[0] if thresh_idx_path == None else H_thresh_idx.shape[0]
+            data_size = x_t.shape[0] if thresh_idx_path == False else H_thresh_idx.shape[0]
             # rand_idx = np.random.permutation(range(data_size))
             subsample_idx = int(subsample_prop*data_size) 
+        if thresh_idx_path != False:
+            x_t = x_t[H_thresh_idx]
+            pow_diff = pow_diff[H_thresh_idx] 
         if subsample_prop < 1.0:
-            if thresh_idx_path != None:
-                x_t = x_t[H_thresh_idx]
-                print(f"after thresh_idx: x_t.shape: {x_t.shape}")
             x_t = x_t[(timeslot-1)*subsample_idx:timeslot*subsample_idx,:,:,:]
             pow_diff = pow_diff[(timeslot-1)*subsample_idx:timeslot*subsample_idx]
             # x_t = x_t[rand_idx[(timeslot-1)*subsample_idx:timeslot*subsample_idx],:,:,:]
