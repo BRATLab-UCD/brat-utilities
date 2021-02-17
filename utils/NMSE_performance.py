@@ -71,6 +71,21 @@ def renorm_H4(data, minmax_file, link_type='down'):
     data = 2 * (data-d_min)/(d_max-d_min) - 1
     return data
 
+### helper function: normalize tanh 
+def renorm_tanh(data, meanvar_file, n_stddev=3):
+    f = sio.loadmat(meanvar_file)
+    mu, sigma = f["mean_all"], np.sqrt(f["var_all"])
+    data = np.tanh((data-mu)/(n_stddev*sigma))
+    return data
+
+### helper function: normalize tanh 
+def denorm_tanh(data, meanvar_file, n_stddev=3):
+    f = sio.loadmat(meanvar_file)
+    mu, sigma = f["mean_all"], np.sqrt(f["var_all"])
+    # data = np.tanh((data-mu)/(n_stddev*sigma))
+    data = np.atanh((data-mu)/)*n_std_dev*sigma + mu
+    return data
+
 ### helper function: denormalize H4 with spherical normalization
 def denorm_sphH4(data, minmax_file, t1_power_file, batch_num, link_type='down', timeslot=0):
     # iterate through batches, denormalize based on extrema of given timeslot
