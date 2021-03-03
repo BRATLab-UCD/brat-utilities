@@ -343,7 +343,7 @@ def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img
     """
     Load and split dataset according to arguments
     Assumes timeslot splits (i.e., concatenating along axis=1)
-    Returns: [data_train, data_val]
+    Returns: [pow_diff, data_train, data_val]
     """
     x_all  = pow_all = None
     assert(len(dataset_spec) == 4)
@@ -382,7 +382,7 @@ def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img
     val_idx = int(x_all.shape[0]*val_split) 
     x_train = x_all[:val_idx,:,:,:,:]
     x_val = x_all[val_idx:,:,:,:,:]
-    pow_val = pow_all[val_idx:,:,:]
+    # pow_val = pow_all[val_idx:,:,:]
 
     # bundle training data calls so they are skippable
     if train_argv:
@@ -421,7 +421,7 @@ def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img
     # if img_channels > 0:
     #     return data_train[:,:,:n_truncate,:], data_val[:,:,:n_truncate,:], data_test[:,:,:n_truncate,:]
     # else:
-    return pow_val, data_train, data_val
+    return pow_all, data_train, data_val
 
 def add_batch_col(dataset, batch, img_channels, img_height, img_width, data_format, n_truncate):
     # concatenate batch data along time axis 
@@ -430,9 +430,11 @@ def add_batch_col(dataset, batch, img_channels, img_height, img_width, data_form
     # -> batch = mat file to add to np.array
     batch = np.expand_dims(batch, axis=1)
     if dataset is None:
-        return batch[:,:,:,:n_truncate] if img_channels > 0 else truncate_flattened_matrix(batch, img_height, img_width, n_truncate)
+        # return batch[:,:,:,:n_truncate] if img_channels > 0 else truncate_flattened_matrix(batch, img_height, img_width, n_truncate)
+        return batch[:,:,:,:n_truncate] 
     else:
-        return np.concatenate((dataset, batch[:,:,:,:,:n_truncate]), axis=1) if img_channels > 0 else np.concatenate((dataset,truncate_flattened_matrix(batch, img_height, img_width, n_truncate)), axis=1)
+        # return np.concatenate((dataset, batch[:,:,:,:,:n_truncate]), axis=1) if img_channels > 0 else np.concatenate((dataset,truncate_flattened_matrix(batch, img_height, img_width, n_truncate)), axis=1)
+        return np.concatenate((dataset, batch[:,:,:,:,:n_truncate]), axis=1) 
 
 def add_batch_pow(dataset, batch):
     # concatenate batch data along time axis 

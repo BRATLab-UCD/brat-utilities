@@ -72,18 +72,19 @@ def renorm_H4(data, minmax_file, link_type='down'):
     return data
 
 ### helper function: normalize tanh 
-def renorm_tanh(data, meanvar_file, n_stddev=3):
+def renorm_tanh(data, meanvar_file, n_stddev=4):
     f = sio.loadmat(meanvar_file)
     mu, sigma = f["mean_all"], np.sqrt(f["var_all"])
     data = np.tanh((data-mu)/(n_stddev*sigma))
     return data
 
 ### helper function: normalize tanh 
-def denorm_tanh(data, meanvar_file, n_stddev=3):
+def denorm_tanh(data, meanvar_file, n_stddev=4, eps=0.01):
     f = sio.loadmat(meanvar_file)
     mu, sigma = f["mean_all"], np.sqrt(f["var_all"])
     # data = np.tanh((data-mu)/(n_stddev*sigma))
-    data = np.arctanh(data)*n_std_dev*sigma + mu
+    data = np.clip(data, -1+eps, 1-eps)
+    data = np.arctanh(data)*n_stddev*sigma + mu
     return data
 
 ### helper function: denormalize H4 with spherical normalization
@@ -236,15 +237,15 @@ def get_NMSE(x_hat, x_test, n_del=32, n_ang=32, return_mse=False, pow_diff_times
         pow_diff = 0 if type(pow_diff_timeslot) == type(None) else pow_diff_timeslot[i]
         tr_term = np.trace(np.matmul(x_err[i,:,:],np.conj(x_err[i,:,:].T)))
         if np.real(power[i]) > 0: # ignore term if power is 0
-            mse += tr_term / N
+            mse += (tr_term + np.real(pow_diff)) / N
             nmse += (tr_term + np.real(pow_diff)) / ((np.real(power[i]) + np.real(pow_diff))*N)
         else:
             N_zero += 1
     nmse =  10*math.log10(np.real(nmse))
-    print(f"--- N_zero={N_zero} ---")
+    # print(f"--- N_zero={N_zero} ---")
 
     if return_mse:
-        return [np.real(mse), nmse]
+        return [np.real(mse).item(), nmse]
     else:
         return nmse
 
