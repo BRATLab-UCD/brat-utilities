@@ -76,14 +76,16 @@ def fit(model, train_ldr, valid_ldr, batch_num, schedule=None, criterion=nn.MSEL
             # for i, data_batch in enumerate(tqdm(train_ldr, desc=f"Epoch #{epoch+1}"), 0):
             for i, data_tuple in enumerate(tqdm(train_ldr, desc=f"Epoch #{epoch+1}"), 0):
                 # inputs = autograd.Variable(data_batch).float()
-                if len(data_tuple) == 1:
+                # print(f"len(data_tuple): {len(data_tuple)}")
+                if len(data_tuple) != 2:
                     data_batch = data_tuple
-                elif len(data_tuple) == 2:
+                # elif len(data_tuple) == 2:
+                else:
                     aux_batch, data_batch = data_tuple
                     aux_input = autograd.Variable(aux_batch)
                 h_input = autograd.Variable(data_batch)
                 optimizer.zero_grad()
-                model_in = h_input if len(data_tuple) == 1 else [aux_input, h_input]
+                model_in = h_input if len(data_tuple) != 2 else [aux_input, h_input]
                 dec = model(model_in)
                 mse = criterion(dec, h_input)
                 train_loss += mse
@@ -110,14 +112,15 @@ def fit(model, train_ldr, valid_ldr, batch_num, schedule=None, criterion=nn.MSEL
                 # for i, data_batch in enumerate(valid_ldr):
                 for i, data_tuple in enumerate(valid_ldr):
                     # inputs = autograd.Variable(data_batch).float()
-                    if len(data_tuple) == 1:
+                    if len(data_tuple) != 2:
                         data_batch = data_tuple
-                    elif len(data_tuple) == 2:
+                    # elif len(data_tuple) == 2:
+                    else:
                         aux_batch, data_batch = data_tuple
                         aux_input = autograd.Variable(aux_batch)
                     h_input = autograd.Variable(data_batch)
                     optimizer.zero_grad()
-                    model_in = h_input if len(data_tuple) == 1 else [aux_input, h_input]
+                    model_in = h_input if len(data_tuple) != 2 else [aux_input, h_input]
                     dec = model(model_in)
                     mse = criterion(dec, h_input)
                     test_loss += mse
@@ -174,13 +177,14 @@ def score(model, valid_ldr, data_test, batch_num, checkpoint, history, optimizer
             y_test = torch.zeros(data_test.shape, dtype=torch_type).to("cpu")
             for i, data_tuple in enumerate(valid_ldr):
                 # inputs = autograd.Variable(data_batch).float()
-                if len(data_tuple) == 1:
+                if len(data_tuple) != 2:
                     data_batch = data_tuple
-                elif len(data_tuple) == 2:
+                # elif len(data_tuple) == 2:
+                else:
                     aux_batch, data_batch = data_tuple
                     aux_input = autograd.Variable(aux_batch)
                 h_input = autograd.Variable(data_batch)
-                model_in = h_input if len(data_tuple) == 1 else [aux_input, h_input]
+                model_in = h_input if len(data_tuple) != 2 else [aux_input, h_input]
             # for i, data_batch in enumerate(valid_ldr):
             #     # inputs = autograd.Variable(data_batch).float()
             #     inputs = autograd.Variable(data_batch)
