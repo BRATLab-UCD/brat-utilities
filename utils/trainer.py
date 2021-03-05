@@ -29,7 +29,7 @@ def count_parameters(model):
     print(f"Total Trainable Params: {total_params}")
     return total_params
 
-def fit(model, train_ldr, valid_ldr, batch_num, schedule=None, criterion=nn.MSELoss(), epochs=10, timers=None, json_config=None, debug_flag=True, pickle_dir=".", input_type="split"):
+def fit(model, train_ldr, valid_ldr, batch_num, schedule=None, criterion=nn.MSELoss(), epochs=10, timers=None, json_config=None, debug_flag=True, pickle_dir=".", input_type="split", patience=1000):
     # pull out timers
     fit_timer = timers["fit_timer"] 
 
@@ -61,8 +61,6 @@ def fit(model, train_ldr, valid_ldr, batch_num, schedule=None, criterion=nn.MSEL
                 }
     l = None
     best_test_loss = None
-    # patience = 200
-    patience = 200
     epochs_no_improvement = 0
     # grace_period = 1000
     # anneal_range = [0.0, 1.0]
@@ -155,7 +153,7 @@ def fit(model, train_ldr, valid_ldr, batch_num, schedule=None, criterion=nn.MSEL
 
     return [model, checkpoint, history, optimizer, timers]
 
-def score(model, valid_ldr, data_test, batch_num, checkpoint, history, optimizer, timeslot=0, err_dict=None, timers=None, json_config=None, debug_flag=True, str_mod="", torch_type=torch.float, diff_spec=[]):
+def score(model, valid_ldr, data_val, batch_num, checkpoint, history, optimizer, timeslot=0, err_dict=None, timers=None, json_config=None, debug_flag=True, str_mod="", torch_type=torch.float, diff_spec=[], n_train=0):
     """
     take model, predict on valid_ldr, score
     currently scores a spherically normalized dataset
@@ -168,13 +166,13 @@ def score(model, valid_ldr, data_test, batch_num, checkpoint, history, optimizer
     batch_size, minmax_file, norm_range = get_keys_from_json(json_config, keys=["batch_size", "minmax_file", "norm_range"])
 
     with predict_timer:
-        # y_hat = torch.zeros(data_test.shape).to(device)
-        # y_test = torch.zeros(data_test.shape).to(device)
+        # y_hat = torch.zeros(data_val.shape).to(device)
+        # y_test = torch.zeros(data_val.shape).to(device)
         model.training = False
         model.eval()
         with torch.no_grad():
-            y_hat = torch.zeros(data_test.shape, dtype=torch_type).to("cpu")
-            y_test = torch.zeros(data_test.shape, dtype=torch_type).to("cpu")
+            y_hat = torch.zeros(data_val.shape, dtype=torch_type).to("cpu")
+            y_test = torch.zeros(data_val.shape, dtype=torch_type).to("cpu")
             for i, data_tuple in enumerate(valid_ldr):
                 # inputs = autograd.Variable(data_batch).float()
                 if len(data_tuple) != 2:
@@ -218,8 +216,12 @@ def score(model, valid_ldr, data_test, batch_num, checkpoint, history, optimizer
             t1_power_file = get_keys_from_json(json_config, keys=["t1_power_file"])[0]
             y_hat_denorm = denorm_sphH4(y_hat.detach().numpy(),minmax_file, t1_power_file, batch_num, timeslot=timeslot)
             y_test_denorm = denorm_sphH4(y_test.detach().numpy(),minmax_file, t1_power_file, batch_num, timeslot=timeslot)
-        print('-> y_hat range is from {} to {}'.format(np.min(y_hat_denorm),np.max(y_hat_denorm)))
-        print('-> y_test range is from {} to {}'.format(np.min(y_test_denorm),np.max(y_test_denorm)))
+        # predicted on pooled data -- split out validation set
+        print('-> post denorm: y_hat range is from {} to {}'.format(np.min(y_hat_denorm),np.max(y_hat_denorm)))
+        print('-> post denorm: y_test range is from {} to {}'.format(np.min(y_test_denorm),np.max(y_test_denorm)))
+        y_test_denorm, y_hat_denorm = y_test_denorm[n_train:,:,:,:], y_hat_denorm[n_train:,:,:,:]
+        print('-> post split: y_hat range is from {} to {}'.format(np.min(y_hat_denorm),np.max(y_hat_denorm)))
+        print('-> post split: y_test range is from {} to {}'.format(np.min(y_test_denorm),np.max(y_test_denorm)))
         y_hat_denorm = y_hat_denorm[:,0,:,:] + 1j*y_hat_denorm[:,1,:,:]
         y_test_denorm = y_test_denorm[:,0,:,:] + 1j*y_test_denorm[:,1,:,:]
         y_shape = y_test_denorm.shape
@@ -230,7 +232,8 @@ def score(model, valid_ldr, data_test, batch_num, checkpoint, history, optimizer
 
         if len(diff_spec) != 0: 
             pow_diff = load_pow_diff(diff_spec)
-            mse, nmse = get_NMSE(y_hat_denorm, y_test_denorm, return_mse=True, n_ang=y_shape[1], n_del=y_shape[2], pow_diff_timeslot=pow_diff) # one-step prediction -> estimate of single timeslot
+            print(f"In trainer.score: len(pow_diff): {len(pow_diff)}")
+            mse, nmse = get_NMSE(y_hat_denorm, y_test_denorm, return_mse=True, n_ang=y_shape[1], n_del=y_shape[2], pow_diff_timeslot=pow_diff[n_train:]) # one-step prediction -> estimate of single timeslot
             print(f"-> {str_mod} Full NMSE = {nmse:5.3f} | MSE = {mse:.4E}")
             checkpoint["best_nmse_full"] = nmse
             checkpoint["best_mse_full"] = mse
@@ -247,8 +250,8 @@ def save_predictions(model, ldr, data, optimizer, timers, err_dict=None, json_co
 
     # make predictions, y_hat
     with predict_timer:
-        # y_hat = torch.zeros(data_test.shape).to(device)
-        # y_test = torch.zeros(data_test.shape).to(device)
+        # y_hat = torch.zeros(data_val.shape).to(device)
+        # y_test = torch.zeros(data_val.shape).to(device)
         model.training = False
         model.eval()
         with torch.no_grad():
