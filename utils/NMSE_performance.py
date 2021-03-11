@@ -95,52 +95,22 @@ def denorm_sphH4(data, minmax_file, t1_power_file, batch_num, link_type='down', 
         f.close()
     extrema = extrema_dict[f"H_{link_type}_ext"]
     if timeslot != -1:
-        print(f"--- Denorm by timeslot={timeslot} ---")
+        # print(f"--- Denorm by timeslot={timeslot} ---")
         d_min, d_max = extrema[0][timeslot], extrema[1][timeslot] # assume single timeslot performance
     else:
-        # print(f"--- Denorm by merging timeslots ---")
-        # d_min = np.min(extrema[0])
-        # d_max = np.max(extrema[1])
-        print(f"--- Denorm by t1 extrema ---")
         d_min = extrema[0][0]
         d_max = extrema[1][0]
     data = (data+1)/2*(d_max-d_min)+d_min
-    # use t1 power to denormalize everything 
-    # for i in range(batch_num):
-    #     with open(f"{t1_power_file}{i+1}.pkl", "rb") as f:
-    #         batch_power = pickle.load(f)
-    #         f.close()
-    #     link_power = batch_power[f"pow_{link_type}"]
-    #     if i == 0: # assuming batches are same size
-    #         link_size = link_power.shape[0]
-    #         batch_size = int(data.shape[0] / batch_num)
-    #         # print(f"--- In denorm, detected batch_size={batch_size} ---")
-    #     temp = np.reshape(data[i*batch_size:(i+1)*batch_size,:,:], (batch_size, -1))
-    #     temp = temp * link_power[link_size-batch_size:,None]
-    #     data[i*batch_size:(i+1)*batch_size,:,:] = np.reshape(temp, (batch_size,)+data.shape[1:])
     with open(f"{t1_power_file}1.pkl", "rb") as f:
         batch_power = pickle.load(f)
         f.close()
     link_power = batch_power[f"pow_{link_type}"]
     temp = np.reshape(data, (data.shape[0], -1)) * link_power[:, None]
-    # temp = temp * link_power[link_size-batch_size:,None]
     data = np.reshape(temp, data.shape)
     return data
 
 ### helper function: renormalize H4 with spherical normalization
 def renorm_sphH4(data, minmax_file, t1_power_file, batch_num, link_type='down', timeslot=0):
-    # iterate through batches, normalize each timeslot by t1 power
-    # for i in range(batch_num):
-    #     with open(f"{t1_power_file}{i+1}.pkl", "rb") as f:
-    #         batch_power = pickle.load(f)
-    #         f.close()
-    #     link_power = batch_power[f"pow_{link_type}"]
-    #     if i == 0: # assuming batches are same size
-    #         link_size = link_power.shape[0]
-    #         batch_size = int(data.shape[0] / batch_num)
-    #         # print(f"--- In denorm, detected batch_size={batch_size} ---")
-    #     data[i*batch_size:(i+1)*batch_size,:,:] = np.reshape(np.reshape(data[i*batch_size:(i+1)*batch_size,:,:], (batch_size, -1)) / link_power[link_size-batch_size:,None], (batch_size,)+data.shape[1:])
-    print(f"--- In renorm_sphH4: data.shape: {data.shape} ---")
     with open(f"{t1_power_file}1.pkl", "rb") as f:
         batch_power = pickle.load(f)
         f.close()
@@ -234,7 +204,6 @@ def get_NMSE(x_hat, x_test, n_del=32, n_ang=32, return_mse=False, pow_diff_times
     return NMSE in dB. optionally return MSE
     reshape based on delay/angle counts
     """
-    print(f"x_test.shape: {x_test.shape} - x_hat.shape: {x_hat.shape}")
     x_err = np.reshape(x_test - x_hat, (x_test.shape[0], n_ang, n_del))
     x_test = np.reshape(x_test, (len(x_test), -1))
     power = np.sum(np.conj(x_test)*x_test, axis=1)
