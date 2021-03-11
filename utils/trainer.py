@@ -16,8 +16,7 @@ from prettytable import PrettyTable
 def count_parameters(model):
     """
     count trainable params in model
-    from Vlad Rusu's SO answer: https://stackoverflow.com/a/62508086
-    """
+    from Vlad Rusu's SO answer: https://stackoverflow.com/a/62508086 """
     table = PrettyTable(["Modules", "Parameters"])
     total_params = 0
     for name, parameter in model.named_parameters():
@@ -29,16 +28,16 @@ def count_parameters(model):
     print(f"Total Trainable Params: {total_params}")
     return total_params
 
-def fit(model, train_ldr, valid_ldr, batch_num, schedule=None, criterion=nn.MSELoss(), epochs=10, timers=None, json_config=None, debug_flag=True, pickle_dir=".", input_type="split", patience=1000):
+def fit(model, train_ldr, valid_ldr, batch_num, schedule=None, criterion=nn.MSELoss(), epochs=10, timers=None, json_config=None, debug_flag=True, pickle_dir=".", input_type="split", patience=1000, network_name=None):
     # pull out timers
     fit_timer = timers["fit_timer"] 
 
     # load hyperparms
-    lr, network_name = get_keys_from_json(json_config, keys=["learning_rate", "network_name"])
+    network_name = get_keys_from_json(json_config, keys=["network_name"])[0] if network_name == None else network_name
 
     # criterion = nn.MSELoss()
     # TODO: if we use lr_schedule, then do we need to use SGD instead? 
-    lr = lr if schedule == None else 1
+    lr = get_keys_from_json(json_config, keys=['learning_rate'])[0] if schedule == None else 1
     # optimizer = optim.SGD(model.parameters(), lr=lr)
     # if schedule != None:
     #     lr_lambda = lambda epoch: schedule.get_param(epoch) 
@@ -153,7 +152,7 @@ def fit(model, train_ldr, valid_ldr, batch_num, schedule=None, criterion=nn.MSEL
 
     return [model, checkpoint, history, optimizer, timers]
 
-def score(model, valid_ldr, data_val, batch_num, checkpoint, history, optimizer, timeslot=0, err_dict=None, timers=None, json_config=None, debug_flag=True, str_mod="", torch_type=torch.float, diff_spec=[], n_train=0):
+def score(model, valid_ldr, data_val, batch_num, checkpoint, history, optimizer, timeslot=0, err_dict=None, timers=None, json_config=None, debug_flag=True, str_mod="", torch_type=torch.float, n_train=0, pow_diff_t=None):
     """
     take model, predict on valid_ldr, score
     currently scores a spherically normalized dataset
@@ -226,19 +225,17 @@ def score(model, valid_ldr, data_val, batch_num, checkpoint, history, optimizer,
         y_test_denorm = y_test_denorm[:,0,:,:] + 1j*y_test_denorm[:,1,:,:]
         y_shape = y_test_denorm.shape
         mse, nmse = get_NMSE(y_hat_denorm, y_test_denorm, return_mse=True, n_ang=y_shape[1], n_del=y_shape[2]) # one-step prediction -> estimate of single timeslot
-        print(f"-> {str_mod} Truncated NMSE = {nmse:5.3f} | MSE = {mse:.4E}")
+        print(f"-> {str_mod} - truncate | NMSE = {nmse:5.3f} | MSE = {mse:.4E}")
         checkpoint["best_nmse"] = nmse
         checkpoint["best_mse"] = mse
 
-        if len(diff_spec) != 0: 
-            pow_diff = load_pow_diff(diff_spec)
-            print(f"In trainer.score: len(pow_diff): {len(pow_diff)}")
-            mse, nmse = get_NMSE(y_hat_denorm, y_test_denorm, return_mse=True, n_ang=y_shape[1], n_del=y_shape[2], pow_diff_timeslot=pow_diff[n_train:]) # one-step prediction -> estimate of single timeslot
-            print(f"-> {str_mod} Full NMSE = {nmse:5.3f} | MSE = {mse:.4E}")
+        if type(pow_diff_t) != type(None): 
+            mse, nmse = get_NMSE(y_hat_denorm, y_test_denorm, return_mse=True, n_ang=y_shape[1], n_del=y_shape[2], pow_diff_timeslot=pow_diff_t[n_train:]) # one-step prediction -> estimate of single timeslot
+            print(f"-> {str_mod} - all | NMSE = {nmse:5.3f} | MSE = {mse:.4E}")
             checkpoint["best_nmse_full"] = nmse
             checkpoint["best_mse_full"] = mse
 
-    return checkpoint
+    return [checkpoint, y_hat, y_test]
 
 def save_predictions(model, ldr, data, optimizer, timers, err_dict=None, json_config=None, dir=".", split="train"):
     """
