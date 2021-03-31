@@ -6,7 +6,7 @@ def quantize(target,val_min=-1.0,val_max=1.0,bits=10):
     """
         Quantize a numpy array between [val_min, val_max] with 2**bits levels
     """
-    bins = linspace(val_min,val_max,2**bits)
+    bins = linspace(val_min,val_max,2**bits-1)
     ind = digitize(target, bins)
     return bins[ind-1]
 

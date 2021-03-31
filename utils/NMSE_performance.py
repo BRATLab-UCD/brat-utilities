@@ -101,7 +101,8 @@ def denorm_sphH4(data, minmax_file, t1_power_file, batch_num, link_type='down', 
         d_min = extrema[0][0]
         d_max = extrema[1][0]
     data = (data+1)/2*(d_max-d_min)+d_min
-    with open(f"{t1_power_file}1.pkl", "rb") as f:
+    # with open(f"{t1_power_file}1.pkl", "rb") as f:
+    with open(f"{t1_power_file}.pkl", "rb") as f:
         batch_power = pickle.load(f)
         f.close()
     link_power = batch_power[f"pow_{link_type}"]
@@ -111,7 +112,8 @@ def denorm_sphH4(data, minmax_file, t1_power_file, batch_num, link_type='down', 
 
 ### helper function: renormalize H4 with spherical normalization
 def renorm_sphH4(data, minmax_file, t1_power_file, batch_num, link_type='down', timeslot=0):
-    with open(f"{t1_power_file}1.pkl", "rb") as f:
+    # with open(f"{t1_power_file}1.pkl", "rb") as f:
+    with open(f"{t1_power_file}.pkl", "rb") as f:
         batch_power = pickle.load(f)
         f.close()
     link_power = batch_power[f"pow_{link_type}"]
@@ -127,6 +129,75 @@ def renorm_sphH4(data, minmax_file, t1_power_file, batch_num, link_type='down', 
         d_min = np.min(extrema[0])
         d_max = np.max(extrema[1])
     data = 2 * (data-d_min)/(d_max-d_min) - 1
+    return data
+
+### helper function: denormalize H3 [0,1] with spherical normalization, magnitude/phase
+def denorm_sph_magH3(data, minmax_file, t1_power_file, batch_num, link_type='down', timeslot=0):
+    # undo minmax scaling on magnitude estimates
+    with open(f"{minmax_file}", "rb") as f:
+        extrema_dict = pickle.load(f)
+        f.close()
+    extrema = extrema_dict[f"H_{link_type}_ext"]
+    if timeslot != -1:
+        d_min, d_max = extrema[0][timeslot], extrema[1][timeslot] # assume single timeslot performance
+    else:
+        d_min = np.min(extrema[0])
+        d_max = np.max(extrema[1])
+    if len(data.shape) == 4:
+        data_mag, data_pha = data[:,0,:,:], data[:,1,:,:]
+        concat_axis = 1
+    elif len(data.shape) == 5:
+        data_mag, data_pha = data[:,:,0,:,:], data[:,:,1,:,:]
+        concat_axis = 2
+    else:
+        print("--- renorm_sph_magH3: data are not correct shape. Expected 4 or 5 axes. ---")
+        return None
+    data_mag = data_mag*(d_max-d_min) + d_min
+    # incoming data channels are [mag, phase]; convert to re/im
+    data_re = np.expand_dims(data_mag*np.cos(data_pha), axis=concat_axis)
+    data_im = np.expand_dims(data_mag*np.sin(data_pha), axis=concat_axis)
+    data = np.concatenate((data_re, data_im), axis=concat_axis)
+    # denorm by sample power
+    with open(f"{t1_power_file}.pkl", "rb") as f:
+        batch_power = pickle.load(f)
+        f.close()
+    link_power = batch_power[f"pow_{link_type}"]
+    # data = np.reshape(np.reshape(data, (data.shape[0], -1)) / link_power[:,None], data.shape)
+    temp = np.reshape(data, (data.shape[0], -1)) * link_power[:, None]
+    data = np.reshape(temp, data.shape)
+    return data
+
+### helper function: renormalize H3 [0,1] with spherical normalization, magnitude/phase
+def renorm_sph_magH3(data, minmax_file, t1_power_file, batch_num, link_type='down', timeslot=0):
+    with open(f"{t1_power_file}.pkl", "rb") as f:
+        batch_power = pickle.load(f)
+        f.close()
+    link_power = batch_power[f"pow_{link_type}"]
+    data = np.reshape(np.reshape(data, (data.shape[0], -1)) / link_power[:,None], data.shape)
+    # split mag/phase
+    if len(data.shape) == 4:
+        data = data[:,0,:,:]+data[:,1,:,:]*1j
+        concat_axis = 1
+    elif len(data.shape) == 5:
+        data = data[:,:,0,:,:]+data[:,:,1,:,:]*1j
+        concat_axis = 2
+    else:
+        print("--- renorm_sph_magH3: data are not correct shape. Expected 4 or 5 axes. ---")
+        return None
+    data_mag = np.abs(data)
+    data_ang = np.angle(data)
+    # perform minmax scaling on magnitude estimates
+    with open(f"{minmax_file}", "rb") as f:
+        extrema_dict = pickle.load(f)
+        f.close()
+    extrema = extrema_dict[f"H_{link_type}_ext"]
+    if timeslot != -1:
+        d_min, d_max = extrema[0][timeslot], extrema[1][timeslot] # assume single timeslot performance
+    else:
+        d_min = np.min(extrema[0])
+        d_max = np.max(extrema[1])
+    data_mag = (data_mag-d_min)/(d_max-d_min)
+    data = np.concatenate([np.expand_dims(data_mag, concat_axis), np.expand_dims(data_ang, concat_axis)], axis=concat_axis)
     return data
 
 # calculate NMSE
@@ -183,16 +254,17 @@ def calc_NMSE(x_hat,x_test,T=3,pow_diff=None):
     return results
 
 # method 1: return NMSE for single timeslot
-# def get_NMSE(x_hat, x_test, return_mse=False):
+# def get_NMSE(x_hat, x_test, n_del=32, n_ang=32, pow_diff_timeslot=None, return_mse=False):
 #     """ return NMSE in dB. optionally return MSE. """
 #     x_test_temp =  np.reshape(x_test, (len(x_test), -1))
 #     x_hat_temp =  np.reshape(x_hat, (len(x_hat), -1))
 #     power = np.sum(abs(x_test_temp)**2, axis=1) # shape = (N, img_total) -> (N,1)
-#     mse = np.sum(abs(x_test_temp-x_hat_temp)**2, axis=1) # (N,1)
+#     pow_diff = np.zeros(power.shape) if type(pow_diff_timeslot) == type(None) else pow_diff_timeslot
+#     mse = np.sum(abs(x_test_temp-x_hat_temp)**2, axis=1) + pow_diff # (N,1)
 #     # mse = mse[np.nonzero(power)] 
 #     # power = power[np.nonzero(power)] 
 #     # print(f"x_test_temp.shape: {x_test_temp.shape} - power.shape: {power.shape} - mse.shape: {mse.shape}")
-#     nmse =  10*math.log10(np.mean(mse/power)) # np.mean((N,1) / (N,1)) 
+#     nmse =  10*math.log10(np.mean(mse/(power+pow_diff))) # np.mean((N,1) / (N,1)) 
 #     if return_mse:
 #         return [np.mean(mse), nmse]
 #     else:

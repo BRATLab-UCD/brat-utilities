@@ -345,9 +345,13 @@ def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img
     Assumes timeslot splits (i.e., concatenating along axis=1)
     Returns: [pow_diff, data_train, data_val]
     """
-    x_all  = pow_all = None
-    assert(len(dataset_spec) == 4)
-    dataset_str, dataset_tail, dataset_key, val_split = dataset_spec
+    x_all = pow_all = None
+    x_all_up = pow_all_up = None
+    if(len(dataset_spec) == 4):
+        dataset_str, dataset_tail, dataset_key, val_split = dataset_spec
+        dataset_key_up = None
+    elif(len(dataset_spec) == 5):
+        dataset_str, dataset_tail, dataset_key, dataset_key_up, val_split = dataset_spec
 
     if thresh_idx_path != False:
         H_thresh_idx = np.squeeze(sio.loadmat(f"{thresh_idx_path}")["i_percent"]) - 1 # subtract one from matlab idx
@@ -358,9 +362,10 @@ def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img
         print(f"--- Adding batch #{timeslot} from {batch_str} ---")
         with h5py.File(batch_str, 'r') as f:
             x_t = np.transpose(f[dataset_key][()], [3,2,1,0])
+            x_t_up = np.transpose(f[dataset_key_up][()], [3,2,1,0]) if type(dataset_key_up) != type(None) else None
             f.close()
         # x_t = sio.loadmat(f"{dataset_str}{timeslot}_{dataset_tail}")[dataset_key]
-        pow_diff = load_pow_diff(diff_spec, T=timeslot)
+        pow_diff, pow_diff_up = load_pow_diff(diff_spec, T=timeslot)
         if timeslot == 1:
             # np.random.seed(1)
             data_size = x_t.shape[0] if thresh_idx_path == False else H_thresh_idx.shape[0]
@@ -368,36 +373,49 @@ def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img
             subsample_idx = int(subsample_prop*data_size) 
         if thresh_idx_path != False:
             x_t = x_t[H_thresh_idx]
+            x_t_up = x_t_up[H_thresh_idx] if type(dataset_key_up) != type(None) else None
             pow_diff = pow_diff[H_thresh_idx] 
+            pow_diff_up = pow_diff_up[H_thresh_idx] if type(dataset_key_up) != type(None) else None
         if subsample_prop < 1.0:
             x_t = x_t[(timeslot-1)*subsample_idx:timeslot*subsample_idx,:,:,:]
+            x_t_up = x_t_up[(timeslot-1)*subsample_idx:timeslot*subsample_idx,:,:,:] if type(dataset_key_up) != type(None) else None
             pow_diff = pow_diff[(timeslot-1)*subsample_idx:timeslot*subsample_idx]
+            pow_diff_up = pow_diff_up[(timeslot-1)*subsample_idx:timeslot*subsample_idx] if type(dataset_key_up) != type(None) else None
             # x_t = x_t[rand_idx[(timeslot-1)*subsample_idx:timeslot*subsample_idx],:,:,:]
             # pow_diff = pow_diff[rand_idx[(timeslot-1)*subsample_idx:timeslot*subsample_idx]]
         x_all = add_batch_col(x_all, x_t, img_channels, img_height, img_width, data_format, n_truncate)
+        x_all_up = add_batch_col(x_all_up, x_t_up, img_channels, img_height, img_width, data_format, n_truncate) if type(dataset_key_up) != type(None) else None
 
         pow_all = add_batch_pow(pow_all, pow_diff)
+        pow_all_up = add_batch_pow(pow_all_up, pow_diff_up) if type(dataset_key_up) != type(None) else None
 
     # split to train/val
     val_idx = int(x_all.shape[0]*val_split) 
     x_train = x_all[:val_idx,:,:,:,:]
     x_val = x_all[val_idx:,:,:,:,:]
+    if type(dataset_key_up) != None:
+        x_train_up = x_all_up[:val_idx,:,:,:,:]
+        x_val_up = x_all_up[val_idx:,:,:,:,:]
+
     # pow_val = pow_all[val_idx:,:,:]
 
     # bundle training data calls so they are skippable
     if train_argv:
         # x_train = subsample_time(x_train,T)
         x_train = x_train.astype('float32')
+        x_train_up = x_train_up.astype('float32') if type(dataset_key_up) != type(None) else None
         if img_channels > 0:
             x_train = np.reshape(x_train, get_data_shape(len(x_train), T, img_channels, img_height, n_truncate, data_format))  # adapt this if using `channels_first` image data format
+            x_train_up = np.reshape(x_train_up, get_data_shape(len(x_train), T, img_channels, img_height, n_truncate, data_format)) if type(dataset_key_up) != type(None) else None # adapt this if using `channels_first` image data format
         if aux_bool:
             aux_train = np.zeros((len(x_train),M_1))
 
     x_val = x_val.astype('float32')
+    x_val_up = x_val_up.astype('float32') if type(dataset_key_up) != type(None) else None
 
     if img_channels > 0:
         x_val = np.reshape(x_val, get_data_shape(len(x_val), T, img_channels, img_height, n_truncate, data_format))  # adapt this if using `channels_first` image data format
-
+        x_val_up = np.reshape(x_val_up, get_data_shape(len(x_val_up), T, img_channels, img_height, n_truncate, data_format)) if type(dataset_key_up) != type(None) else None  # adapt this if using `channels_first` image data format
     if aux_bool:
         aux_val = np.zeros((len(x_val),M_1)).astype('float32')
 
@@ -408,20 +426,28 @@ def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img
         val_min, val_max, bits = get_keys_from_json(quant_config, keys=['val_min','val_max','bits'])
     if train_argv:
         data_train = x_train if not quant_bool else quantize(x_train,val_min,val_max,bits) 
+        data_train_up = x_train_up if not quant_bool else quantize(x_train,val_min,val_max,bits) 
 
     data_val = x_val if not quant_bool else quantize(x_val,val_min,val_max,bits) 
+    data_val_up = x_val_up if not quant_bool else quantize(x_val,val_min,val_max,bits) 
     if aux_bool:
         if train_argv:
             data_train = [aux_train, data_train]
+            data_train_up = [aux_train, data_train_up]
         data_val = [aux_val, data_val]
+        data_val_up = [aux_val, data_val_up]
 
     if (not train_argv):
         data_train = None
+        data_train_up = None
 
     # if img_channels > 0:
     #     return data_train[:,:,:n_truncate,:], data_val[:,:,:n_truncate,:], data_test[:,:,:n_truncate,:]
     # else:
-    return pow_all, data_train, data_val
+    if type(dataset_key_up) != type(None):
+        return pow_all, data_train, data_val, pow_all_up, data_train_up, data_val_up
+    else:
+        return pow_all, data_train, data_val
 
 def add_batch_col(dataset, batch, img_channels, img_height, img_width, data_format, n_truncate):
     # concatenate batch data along time axis 
@@ -434,7 +460,7 @@ def add_batch_col(dataset, batch, img_channels, img_height, img_width, data_form
         return batch[:,:,:,:n_truncate] 
     else:
         # return np.concatenate((dataset, batch[:,:,:,:,:n_truncate]), axis=1) if img_channels > 0 else np.concatenate((dataset,truncate_flattened_matrix(batch, img_height, img_width, n_truncate)), axis=1)
-        return np.concatenate((dataset, batch[:,:,:,:,:n_truncate]), axis=1) 
+        return np.concatenate((dataset, batch[:,:,:,:n_truncate,:]), axis=1) 
 
 def add_batch_pow(dataset, batch):
     # concatenate batch data along time axis 
@@ -449,11 +475,16 @@ def add_batch_pow(dataset, batch):
 
 def load_pow_diff(diff_spec,T=1):
     # TODO: load data for T > 1
-    # pow_diff_val = sio.loadmat(f"{diff_spec[0]}1.mat")["Pow_val"]
-    # pow_diff_test = sio.loadmat(f"{diff_spec[1]}1.mat")["Pow_test"]
-    # pow_diff = np.squeeze(np.vstack((pow_diff_val, pow_diff_test)))
-    pow_diff = sio.loadmat(f"{diff_spec[0]}{T}.mat")["Power_diff"]
-    return pow_diff
+    # re: magic numbers -- matfiles have __header__, __version__, and __global__ keys
+    # we skip i in [0,1,2] when processing the loaded mat_dict
+    mat_dict = sio.loadmat(f"{diff_spec[0]}{T}.mat")
+    for i, (key, val) in enumerate(mat_dict.items()):
+        if i == 3:
+            pow_diff_down = mat_dict[key]
+            pow_diff_up = None
+        if i == 4:
+            pow_diff_up = mat_dict[key]
+    return pow_diff_down if type(pow_diff_up) == type(None) else [pow_diff_down, pow_diff_up]
 
 def add_batch_complex(data_down, batch, n_truncate):
     # concatenate batch data onto end of data
