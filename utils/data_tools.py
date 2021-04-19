@@ -393,9 +393,9 @@ def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img
     val_idx = int(x_all.shape[0]*val_split) 
     x_train = x_all[:val_idx,:,:,:,:]
     x_val = x_all[val_idx:,:,:,:,:]
-    if type(dataset_key_up) != None:
-        x_train_up = x_all_up[:val_idx,:,:,:,:]
-        x_val_up = x_all_up[val_idx:,:,:,:,:]
+    if type(dataset_key_up) != type(None):
+        x_train_up = x_all_up[:val_idx,:,:,:,:] 
+        x_val_up = x_all_up[val_idx:,:,:,:,:] 
 
     # pow_val = pow_all[val_idx:,:,:]
 
@@ -484,7 +484,7 @@ def load_pow_diff(diff_spec,T=1):
             pow_diff_up = None
         if i == 4:
             pow_diff_up = mat_dict[key]
-    return pow_diff_down if type(pow_diff_up) == type(None) else [pow_diff_down, pow_diff_up]
+    return [pow_diff_down, None] if type(pow_diff_up) == type(None) else [pow_diff_down, pow_diff_up]
 
 def add_batch_complex(data_down, batch, n_truncate):
     # concatenate batch data onto end of data
