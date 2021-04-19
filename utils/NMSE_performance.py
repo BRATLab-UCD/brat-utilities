@@ -48,26 +48,46 @@ def denorm_H3(data,minmax_file,link_type='down'):
     return data
 
 ### helper function: denormalize H4
-def denorm_H4(data,minmax_file,link_type='down'):
+def denorm_H4(data,minmax_file,link_type='down', timeslot=0):
     fieldnames = ['link','min','max']
-    with open(minmax_file) as csv_file:
-        csv_reader = csv.DictReader(csv_file,fieldnames=fieldnames,delimiter=',')
-        for row in csv_reader:
-            if row['link']==link_type:
-                d_min = float(row['min'])
-                d_max = float(row['max'])
+    if "csv" in minmax_file:
+        with open(minmax_file) as csv_file:
+            csv_reader = csv.DictReader(csv_file,fieldnames=fieldnames,delimiter=',')
+            for row in csv_reader:
+                if row['link']==link_type:
+                    d_min = float(row['min'])
+                    d_max = float(row['max'])
+    elif "pkl" in minmax_file:
+        with open(f"{minmax_file}", "rb") as f:
+            extrema_dict = pickle.load(f)
+            f.close()
+        extrema = extrema_dict[f"H_{link_type}_ext"]
+        if timeslot != -1:
+            d_min, d_max = np.min(extrema[0]), np.max(extrema[1]) # assume single timeslot performance
+        else:
+            d_min, d_max = extrema[0][timeslot], extrema[1][timeslot] # assume single timeslot performance
     data = (data+1)/2*(d_max-d_min)+d_min
     return data
 
 ### helper function: normalize H4 (minmax scaling)
-def renorm_H4(data, minmax_file, link_type='down'):
+def renorm_H4(data, minmax_file, link_type='down', timeslot=0):
     fieldnames = ['link','min','max']
-    with open(minmax_file) as csv_file:
-        csv_reader = csv.DictReader(csv_file,fieldnames=fieldnames,delimiter=',')
-        for row in csv_reader:
-            if row['link']==link_type:
-                d_min = float(row['min'])
-                d_max = float(row['max'])
+    if "csv" in minmax_file:
+        with open(minmax_file) as csv_file:
+            csv_reader = csv.DictReader(csv_file,fieldnames=fieldnames,delimiter=',')
+            for row in csv_reader:
+                if row['link']==link_type:
+                    d_min = float(row['min'])
+                    d_max = float(row['max'])
+    elif "pkl" in minmax_file:
+        with open(f"{minmax_file}", "rb") as f:
+            extrema_dict = pickle.load(f)
+            f.close()
+        extrema = extrema_dict[f"H_{link_type}_ext"]
+        if timeslot != -1:
+            d_min, d_max = np.min(extrema[0]), np.max(extrema[1]) # assume single timeslot performance
+        else:
+            d_min, d_max = extrema[0][timeslot], extrema[1][timeslot] # assume single timeslot performance
     data = 2 * (data-d_min)/(d_max-d_min) - 1
     return data
 
@@ -152,6 +172,7 @@ def denorm_sph_magH3(data, minmax_file, t1_power_file, batch_num, link_type='dow
     else:
         print("--- renorm_sph_magH3: data are not correct shape. Expected 4 or 5 axes. ---")
         return None
+    # data_mag = np.clip(data_mag, 0, 1) # trying this; avoid negative magnitude values 
     data_mag = data_mag*(d_max-d_min) + d_min
     # incoming data channels are [mag, phase]; convert to re/im
     data_re = np.expand_dims(data_mag*np.cos(data_pha), axis=concat_axis)
