@@ -7,7 +7,7 @@ from tqdm import tqdm
 from torch import nn, optim, autograd
 
 sys.path.append("/home/mdelrosa/git/brat")
-from utils.NMSE_performance import get_NMSE, denorm_H3, denorm_H4, denorm_sphH4, denorm_sph_magH3
+from utils.NMSE_performance import get_NMSE, denorm_H3, denorm_H4, denorm_sphH4, denorm_sph_magH3, denorm_magH3
 from utils.data_tools import dataset_pipeline, subsample_batches, split_complex, load_pow_diff
 from utils.unpack_json import get_keys_from_json
 
@@ -28,7 +28,7 @@ def count_parameters(model):
     print(f"Total Trainable Params: {total_params}")
     return total_params
 
-def fit(model, train_ldr, valid_ldr, batch_num, schedule=None, criterion=nn.MSELoss(), epochs=10, timers=None, json_config=None, debug_flag=True, pickle_dir=".", input_type="split", patience=1000, network_name=None):
+def fit(model, train_ldr, valid_ldr, batch_num, schedule=None, criterion=nn.MSELoss(), epochs=10, timers=None, json_config=None, debug_flag=True, pickle_dir=".", input_type="split", patience=5000, network_name=None):
     # pull out timers
     fit_timer = timers["fit_timer"] 
 
@@ -84,7 +84,7 @@ def fit(model, train_ldr, valid_ldr, batch_num, schedule=None, criterion=nn.MSEL
                 optimizer.zero_grad()
                 model_in = h_input if len(data_tuple) != 2 else [aux_input, h_input]
                 dec = model(model_in)
-                mse = criterion(dec, h_input[:,1,:,:].unsqueeze(1))
+                mse = criterion(dec, h_input[:,1,:,:].unsqueeze(1)) #TODO: remove indices; is this compatible with other models? (CsiNetPro?)
                 train_loss += mse
                 mse.backward()
                 # torch.nn.utils.clip_grad_norm_(model.parameters(), clip_val) # clip
@@ -152,7 +152,7 @@ def fit(model, train_ldr, valid_ldr, batch_num, schedule=None, criterion=nn.MSEL
 
     return [model, checkpoint, history, optimizer, timers]
 
-def score(model, valid_ldr, data_val, batch_num, checkpoint, history, optimizer, timeslot=0, err_dict=None, timers=None, json_config=None, debug_flag=True, str_mod="", torch_type=torch.float, n_train=0, pow_diff_t=None, data_phase=None):
+def score(model, valid_ldr, data_val, batch_num, checkpoint, history, optimizer, timeslot=0, err_dict=None, timers=None, json_config=None, debug_flag=True, str_mod="", torch_type=torch.float, n_train=0, pow_diff_t=None, data_phase=None, thresh_idx_path=False):
     """
     take model, predict on valid_ldr, score
     currently scores a spherically normalized dataset
@@ -199,19 +199,30 @@ def score(model, valid_ldr, data_val, batch_num, checkpoint, history, optimizer,
             y_hat = y_hat * err_dict["M"] + err_dict["hat"]
             y_test = y_test * err_dict["M"] + err_dict["hat"]
         elif len(err_dict["M"]) == 2: # list with min/max
-            y_hat = y_hat * (err_dict["M"][1] - err_dict["M"][0]) + err_dict["hat"]
-            y_test = y_test * (err_dict["M"][1] - err_dict["M"][0]) + err_dict["hat"]
-            data_phase = err_dict["data_phase"]
+            # in this case, y_hat/y_test are error magnitude estimate/ground truth
+            print(f"--- pre-denorm: E_hat range: {np.min(y_hat.detach().numpy()):4.3E} to {np.max(y_hat.detach().numpy()):4.3E} ---")
+            print(f"--- pre-denorm: E_test range: {np.min(y_test.detach().numpy()):4.3E} to {np.max(y_test.detach().numpy()):4.3E} ---")
+            E_hat = y_hat[:,0,:,:] * (err_dict["M"][1] - err_dict["M"][0]) + err_dict["M"][0] # denorm error
+            E_test = y_test[:,0,:,:] * (err_dict["M"][1] - err_dict["M"][0]) + err_dict["M"][0] # denorm error
+            print(f"--- post-denorm: E_hat range: {np.min(E_hat.detach().numpy()):4.3E} to {np.max(E_hat.detach().numpy()):4.3E} ---")
+            print(f"--- post-denorm: E_test range: {np.min(E_test.detach().numpy()):4.3E} to {np.max(E_test.detach().numpy()):4.3E} ---")
+            y_hat = E_hat + err_dict["hat"][:,0,:,:] # add error term back; hat magnitude
+            y_test = E_test + err_dict["hat"][:,0,:,:] # add error term back; test magnitude
+            y_hat = torch.from_numpy(np.expand_dims(y_hat, axis=1)).to("cpu")
+            y_test = torch.from_numpy(np.expand_dims(y_test, axis=1)).to("cpu")
+            data_phase = [None, None]
+            data_phase[0] = err_dict["data_phase"][0] + np.expand_dims(err_dict["gt"][:,1,:,:], axis=1)
+            data_phase[1] = err_dict["data_phase"][1] + np.expand_dims(err_dict["hat"][:,1,:,:], axis=1)
 
     # score model - account for spherical normalization
     with score_timer:
-        if y_hat.shape[1] == 1:
-            y_hat = torch.cat((y_hat.real, y_hat.imag), 1)
-            y_test = torch.cat((y_test.real, y_test.imag), 1)
-        elif norm_range == "norm_sph_magH3": # drop second channel, which should only include 0's
+        # if y_hat.shape[1] == 1:
+        #     y_hat = torch.cat((y_hat.real, y_hat.imag), 1)
+        #     y_test = torch.cat((y_test.real, y_test.imag), 1)
+        print(f"y_hat.shape: {y_hat.shape} - y_test.shape: {y_test.shape} - data_phase[0].shape: {data_phase[0].shape} - data_phase[1].shape: {data_phase[1].shape}")    
+        if norm_range in ["norm_sph_magH3", "norm_magH3"]:
             y_hat = y_hat[:,0,:,:].unsqueeze(1)
             y_test = y_test[:,0,:,:].unsqueeze(1)
-        print(f"y_hat.shape: {y_hat.shape}")
         print('-> pre denorm: y_hat range is from {} to {}'.format(np.min(y_hat.detach().numpy()), np.max(y_hat.detach().numpy())))
         print('-> pre denorm: y_test range is from {} to {}'.format(np.min(y_test.detach().numpy()),np.max(y_test.detach().numpy())))
         if norm_range == "norm_H3":
@@ -222,8 +233,8 @@ def score(model, valid_ldr, data_val, batch_num, checkpoint, history, optimizer,
             y_test_denorm = denorm_H4(y_test.to("cpu").detach().numpy(),minmax_file)
         elif norm_range == "norm_sphH4":
             t1_power_file = get_keys_from_json(json_config, keys=["t1_power_file"])[0]
-            y_hat_denorm = denorm_sphH4(y_hat.detach().numpy(),minmax_file, t1_power_file, batch_num, timeslot=timeslot)
-            y_test_denorm = denorm_sphH4(y_test.detach().numpy(),minmax_file, t1_power_file, batch_num, timeslot=timeslot)
+            y_hat_denorm = denorm_sphH4(y_hat.detach().numpy(),minmax_file, t1_power_file, batch_num, timeslot=timeslot, thresh_idx_path=thresh_idx_path)
+            y_test_denorm = denorm_sphH4(y_test.detach().numpy(),minmax_file, t1_power_file, batch_num, timeslot=timeslot, thresh_idx_path=thresh_idx_path)
         elif norm_range == "norm_sph_magH3":
             assert(type(data_phase) != type(None))
             t1_power_file = get_keys_from_json(json_config, keys=["t1_power_file"])[0]
@@ -231,7 +242,12 @@ def score(model, valid_ldr, data_val, batch_num, checkpoint, history, optimizer,
             y_test_denorm = denorm_sph_magH3(y_test,minmax_file, t1_power_file, batch_num, timeslot=timeslot)
             y_hat = np.concatenate((y_hat.detach().numpy(), data_phase[1]), axis=1)
             y_hat_denorm = denorm_sph_magH3(y_hat,minmax_file, t1_power_file, batch_num, timeslot=timeslot)
-            y_hat = np.concatenate((np.expand_dims(y_hat[:,0,:,:], axis=1), data_phase[0]), axis=1) # return hat with non-quantized phase
+            # y_hat = np.concatenate((np.expand_dims(y_hat[:,0,:,:], axis=1), data_phase[0]), axis=1) # return hat with non-quantized phase
+        elif norm_range == "norm_magH3":
+            y_test = np.concatenate((y_test.detach().numpy(), data_phase[0]), axis=1)
+            y_test_denorm = denorm_magH3(y_test, minmax_file, timeslot=timeslot)
+            y_hat = np.concatenate((y_hat.detach().numpy(), data_phase[1]), axis=1)
+            y_hat_denorm = denorm_magH3(y_hat, minmax_file, timeslot=timeslot)
         # predicted on pooled data -- split out validation set
         print('-> post denorm: y_hat range is from {} to {}'.format(np.min(y_hat_denorm),np.max(y_hat_denorm)))
         print('-> post denorm: y_test range is from {} to {}'.format(np.min(y_test_denorm),np.max(y_test_denorm)))

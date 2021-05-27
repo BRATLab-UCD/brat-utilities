@@ -4,7 +4,7 @@ import h5py
 # import os # for checking process memory
 import pickle
 
-def get_t1_power_col(dataset_spec, outpath, stride=1, T=10):
+def get_t1_power_col(dataset_spec, outpath, stride=1, T=10, img_channels=2, img_height=32, img_width=32, mat_type=0):
     # iterate through timeslots, store:
     # 1. running min and max of each timeslot
     # 2. power for each timeslot
@@ -18,10 +18,17 @@ def get_t1_power_col(dataset_spec, outpath, stride=1, T=10):
     for timeslot in range(1,T*stride+1,stride):
         batch_str = f"{dataset_str}{timeslot}_{dataset_tail}"
         print(f"--- Adding batch #{timeslot} from {batch_str} ---")
-        with h5py.File(batch_str, 'r') as f:
-            x_t = np.transpose(f[dataset_key][()], [3,2,1,0])
-            f.close()
-
+        if mat_type == 0:
+            with h5py.File(batch_str, 'r') as f:
+                x_t = np.transpose(f[dataset_key][()], [3,2,1,0])
+                f.close()
+        elif mat_type == 1:
+            mat = sio.loadmat(batch_str)
+            x_t = mat[dataset_key]
+            x_t = np.reshape(x_t, (x_t.shape[0], img_channels, img_height, img_width))
+        else:
+            print("--- Unrecognized mat_type ---")
+            return None
         if timeslot == 1:
             samples, num_channels, img_height, img_width = x_t.shape
 
@@ -70,7 +77,7 @@ def get_t1_power_col(dataset_spec, outpath, stride=1, T=10):
         pickle.dump(extrema_dict_pre, f)
         f.close()
 
-def get_t1_power_col_mag(dataset_spec, outpath, stride=1, T=10):
+def get_t1_power_col_mag(dataset_spec, outpath, stride=1, T=10, mat_type=0, img_channels=2, img_height=32, img_width=32):
     # magnitude-based spherical normalization -- get power 
     # iterate through timeslots, store:
     # 1. running min and max of each timeslot
@@ -93,11 +100,20 @@ def get_t1_power_col_mag(dataset_spec, outpath, stride=1, T=10):
     for timeslot in range(1,T*stride+1,stride):
         batch_str = f"{dataset_str}{timeslot}_{dataset_tail}"
         print(f"--- Adding batch #{timeslot} from {batch_str} ---")
-        with h5py.File(batch_str, 'r') as f:
-            # print(f"keys in {batch_str}: {list(f.keys())}")
-            x_t    = np.transpose(f[key_down][()], [3,2,1,0])
-            x_t_u = np.transpose(f[key_up][()], [3,2,1,0])
-            f.close()
+        if mat_type == 0:
+            with h5py.File(batch_str, 'r') as f:
+                x_t = np.transpose(f[key_down][()], [3,2,1,0])
+                x_t_u = np.transpose(f[key_up][()], [3,2,1,0])
+                f.close()
+        elif mat_type == 1:
+            mat = sio.loadmat(batch_str)
+            x_t = mat[key_down]
+            x_t = np.reshape(x_t, (x_t.shape[0], img_channels, img_height, img_width))
+            x_t_u = mat[key_up]
+            x_t_u = np.reshape(x_t_u, (x_t_u.shape[0], img_channels, img_height, img_width))
+        else:
+            print("--- Unrecognized mat_type ---")
+            return None
 
         if timeslot == 1:
             samples, num_channels, n_delay, n_angle = x_t.shape
@@ -172,4 +188,68 @@ def get_t1_power_col_mag(dataset_spec, outpath, stride=1, T=10):
     extrema_dict_pre = {"H_down_ext": [H_down_min_pre, H_down_max_pre], "H_up_ext": [H_up_min_pre, H_up_max_pre]}
     with open(f"{outpath}/H_timeslot_extrema_pre.pkl", "wb") as f:
         pickle.dump(extrema_dict_pre, f)
+        f.close()
+
+def get_t1_col_mag(dataset_spec, outpath, stride=1, T=10, mat_type=0, img_channels=2, img_height=32, img_width=32):
+    # magnitude-based minmax normalization 
+    # iterate through timeslots, store:
+    # 1. running min and max of each timeslot
+    assert(len(dataset_spec) == 5)
+    dataset_str, dataset_tail, key_down, key_up, val_split = dataset_spec
+
+    H_down_min = np.zeros(T)
+    H_down_max = np.zeros(T)
+    H_mag_down_min = np.zeros(T)
+    H_mag_down_max = np.zeros(T)
+    H_up_min = np.zeros(T)
+    H_up_max = np.zeros(T)
+    H_mag_up_min = np.zeros(T)
+    H_mag_up_max = np.zeros(T)
+    for timeslot in range(1,T*stride+1,stride):
+        batch_str = f"{dataset_str}{timeslot}_{dataset_tail}"
+        print(f"--- Adding batch #{timeslot} from {batch_str} ---")
+        if mat_type == 0:
+            with h5py.File(batch_str, 'r') as f:
+                x_t = np.transpose(f[key_down][()], [3,2,1,0])
+                x_t_u = np.transpose(f[key_up][()], [3,2,1,0])
+                f.close()
+        elif mat_type == 1:
+            mat = sio.loadmat(batch_str)
+            x_t = mat[key_down]
+            x_t = np.reshape(x_t, (x_t.shape[0], img_channels, img_height, img_width))
+            x_t_u = mat[key_up]
+            x_t_u = np.reshape(x_t_u, (x_t_u.shape[0], img_channels, img_height, img_width))
+        else:
+            print("--- Unrecognized mat_type ---")
+            return None
+
+        if timeslot == 1:
+            samples, num_channels, n_delay, n_angle = x_t.shape
+
+        # iterate over each timeslot, and calculate magnitude extrema per timeslot
+
+        j = timeslot - 1 # alias for timeslot - 1
+        H_down_min[j] = np.min(x_t)
+        H_down_max[j] = np.max(x_t)
+        H_up_min[j] = np.min(x_t_u)
+        H_up_max[j] = np.max(x_t_u)
+
+        # H_mag_down = np.sqrt(norm_down[:,0,:,:]**2, norm_down[:,1,:,:]**2)
+        # H_mag_up   = np.sqrt(norm_up[:,0,:,:]**2, norm_up[:,1,:,:]**2)
+        H_mag_down = np.absolute(x_t[:,0,:,:]+x_t[:,1,:,:]*1j)
+        H_mag_up = np.absolute(x_t_u[:,0,:,:]+x_t_u[:,1,:,:]*1j)
+        H_mag_down_min[j] = np.min(H_mag_down)
+        H_mag_down_max[j] = np.max(H_mag_down)
+        H_mag_up_min[j] = np.min(H_mag_up) 
+        H_mag_up_max[j] = np.max(H_mag_up)
+        print(f"H_down_min: {H_down_min[j]} - H_down_max: {H_down_max[j]} - H_mag_down_min: {H_mag_down_min[j]} - H_mag_down_max: {H_mag_down_max[j]}")
+        print(f"H_up_min: {H_up_min[j]} - H_up_max: {H_up_max[j]} - H_mag_up_min: {H_mag_up_min[j]} - H_mag_up_max: {H_mag_up_max[j]}")
+
+    for i in range(T):
+        print(f"t{i+1} down: pre_min: {H_down_min[j]} - pre_max: {H_down_max[j]} - mag_min={H_mag_down_min} - mag_max={H_mag_down_max}")
+        print(f"t{i+1}   up: pre_min: {H_up_min[j]} - pre_max: {H_up_max[j]} - mag_min={H_mag_up_min} - mag_max={H_mag_up_max}")
+
+    extrema_dict = {"H_down_ext": [H_mag_down_min, H_mag_down_max], "H_up_ext": [H_mag_up_min, H_mag_up_max]}
+    with open(f"{outpath}/H_timeslot_extrema_mag.pkl", "wb") as f:
+        pickle.dump(extrema_dict, f)
         f.close()
