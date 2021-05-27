@@ -29,7 +29,7 @@ json_config = "config/csinet_indoor_cost2100_pow.json" if opt.env == "indoor" el
 
 # unpack config file
 dataset_spec, img_channels, data_format, T, n_delay, diff_spec = get_keys_from_json(json_config, keys=["dataset_spec", "img_channels", "data_format", "T", "n_delay", "diff_spec"])
-input_dim = (2,32,n_delay)
+input_dim = (2,n_delay,32)
 aux_bool = False
 aux_size = 0
 
