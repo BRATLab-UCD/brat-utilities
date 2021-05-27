@@ -170,6 +170,122 @@ def combine_complex(data, height=32, width=32, n_chan=0, T=10):
         elif len(data.shape) == 4:
             return data[:,0,:,:] + data[:,1,:,:]*1j
 
+def dataset_pipeline_full_batchwise(i_batch, batch_offset, debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img_channels = 2, img_height = 32, img_width = 32, T = 10, train_argv = True, n_truncate=32):
+    """
+    Load and split dataset according to arguments
+    Assumes batch-wise splits (i.e., concatenating along axis=0)
+    Assumes dataset_full_key, indicating presence of full CSI matrices 
+    Returns batch inexed by i_batch
+    mode -> "full" returns non-truncated matrices
+         -> "truncate" returns truncated matrices
+    Returns: [pow_diff, data_train, data_val]
+    """
+
+    x_all = x_all_full = pow_all = None
+
+    assert(len(dataset_spec) == 5)
+    dataset_str, dataset_tail, dataset_key, dataset_full_key, val_split = dataset_spec
+
+    batch_str = f"{dataset_str}{i_batch}{dataset_tail}"
+    print(f"--- Adding batch #{i_batch} from {batch_str} ---")
+    with h5py.File(batch_str, 'r') as f:
+        x_t = np.transpose(f[dataset_key][()], [3,2,1,0])
+        x_t_full = np.transpose(f[dataset_full_key][()], [3,2,1,0]) 
+        f.close()
+    # def add_batch_full(data, batch, n_delay, n_angle, n_truncate):
+    x_all = add_batch_full(x_all, x_t, img_height, img_width, n_truncate)
+    x_all_full = add_batch_full(x_all_full, x_t_full, img_height, img_width, n_truncate)
+
+    if aux_bool:
+        aux_t = np.zeros((len(x_all), M_1)).astype('float32')
+        data_t = [aux_t, x_all]
+    else:
+        data_t = x_all
+
+    T = x_all.shape[1]
+    for timeslot in range(1,T+1):
+        pow_diff, pow_diff_up = load_pow_diff(diff_spec, T=timeslot)
+        pow_all = add_batch_pow(pow_all, pow_diff)
+
+    # slice relevant batches 
+    i_batch = i_batch - batch_offset
+    idx_s = i_batch * x_all.shape[0]
+    idx_e = idx_s + x_all.shape[0]
+    print(f"--- idx_s: {idx_s}, idx_e: {idx_e} ---")
+    pow_all = pow_all[idx_s:idx_e, :]
+    
+    return [pow_all, data_t, x_all_full]
+    # return [pow_all, data_train, data_val, x_train_full, x_val_full]
+
+def dataset_pipeline_full(batch_num, batch_offset, debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img_channels = 2, img_height = 32, img_width = 32, T = 10, train_argv = True, n_truncate=32, mode="full"):
+    """
+    Load and split dataset according to arguments
+    Assumes batch-wise splits (i.e., concatenating along axis=0)
+    Assumes dataset_full_key, indicating presence of full CSI matrices 
+    mode -> "full" returns non-truncated matrices
+         -> "truncate" returns truncated matrices
+    Returns: [pow_diff, data_train, data_val]
+    """
+
+    # x_train = x_val = x_train_full = x_val_full = None
+    # x_all = x_all_full = pow_all = None
+    x_all = pow_all = None
+
+    assert(len(dataset_spec) == 5)
+    dataset_str, dataset_tail, dataset_key, dataset_full_key, val_split = dataset_spec
+
+    assert(mode in ["truncate", "full"])
+    target_key = dataset_key if mode == "truncate" else dataset_full_key
+
+    for batch in range(batch_num):
+    # for batch in range(1,batch_num+1):
+        true_batch = batch + batch_offset
+        batch_str = f"{dataset_str}{true_batch}{dataset_tail}"
+        print(f"--- Adding batch #{batch} from {batch_str} with key={target_key} ---")
+        with h5py.File(batch_str, 'r') as f:
+            x_t = np.transpose(f[target_key][()], [3,2,1,0])
+            # x_t_full = np.transpose(f[dataset_full_key][()], [3,2,1,0]) if type(dataset_full_key) != type(None) else None
+            f.close()
+        # def add_batch_full(data, batch, n_delay, n_angle, n_truncate):
+        x_all = add_batch_full(x_all, x_t, img_height, img_width, n_truncate)
+        # x_all_full = add_batch_full(x_all_full, x_t_full, img_height, img_width, x_t_full.shape[2])
+
+    # split to train/val
+    val_idx = int(x_all.shape[0]*val_split) 
+    x_train = x_all[:val_idx,:,:,:]
+    x_val = x_all[val_idx:,:,:,:]
+    # x_train_full = x_all_full[:val_idx,:,:,:]
+    # x_val_full = x_all_full[val_idx:,:,:,:]
+
+    # data_list = [x_train, x_val, x_train_full, x_val_full]
+    # data_strs = ["x_train", "x_val", "x_train_full", "x_val_full"]
+    data_list = [x_train, x_val]
+    data_strs = ["x_train", "x_val"]
+    for data_i, str_i in zip(data_list, data_strs):
+        print(f"-> {str_i}.shape: {data_i.shape}")
+
+    if aux_bool and mode == "truncate":
+        if train_argv:
+            aux_train = np.zeros((len(x_train),M_1))
+            data_train = [aux_train, x_train]
+        aux_val = np.zeros((len(x_val),M_1)).astype('float32')
+        data_val = [aux_val, x_val]
+    else:
+        data_train = x_train
+        data_val = x_val
+
+    T = x_all.shape[1]
+    for timeslot in range(1,T+1):
+        print(f"--- Adding pow #{timeslot} using {diff_spec[0]}{timeslot}.mat ---")
+        pow_diff, pow_diff_up = load_pow_diff(diff_spec, T=timeslot)
+        pow_all = add_batch_pow(pow_all, pow_diff)
+
+    # TODO: get rid of this once we are using all batches
+    pow_all = pow_all[:x_all.shape[0]]
+    
+    return [pow_all, data_train, data_val]
+    # return [pow_all, data_train, data_val, x_train_full, x_val_full]
+
 def dataset_pipeline(batch_num, debug_flag, aux_bool, dataset_spec, M_1, img_channels = 2, img_height = 32, img_width = 32, data_format = "channels_first", T = 10, train_argv = True,  merge_val_test = True, quant_config = None, idx_split=0, n_truncate=32, total_num_files=21):
     """
     Load and split dataset according to arguments
@@ -188,13 +304,7 @@ def dataset_pipeline(batch_num, debug_flag, aux_bool, dataset_spec, M_1, img_cha
         train_str = 'data/data_001/Data100_Htrainin_down_FDD_32ant'
         val_str = 'data/data_001/Data100_Hvalin_down_FDD_32ant'
 
-    # start from split idx*batch_num 
-    idx_start = idx_split*batch_num+1 # idx_split is 0-indexed
-    if (idx_start > total_num_files) or (idx_start+batch_num > total_num_files): 
-        print("=== idx_split too large for given batch_num and total_num_files ===")
-        return None
-
-    for batch in range(idx_start, batch_num+idx_start):
+    for batch in range(batch_num):
         print("--- Adding batch #{} ---".format(batch))
         # mat = sio.loadmat('data/data_001/Data100_Htrainin_down_FDD_32ant_{}.mat'.format(batch))
         if train_argv:
@@ -339,7 +449,7 @@ def dataset_pipeline_complex(debug_flag, aux_bool, dataset_spec, diff_spec, M_1,
     # else:
     return data_train, data_val
 
-def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img_channels = 2, img_height = 32, img_width = 32, data_format = "channels_first", T = 10, train_argv = True, quant_config = None, idx_split=0, n_truncate=32, total_num_files=21, subsample_prop=1.0, thresh_idx_path=False, stride=1):
+def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img_channels = 2, img_height = 32, img_width = 32, data_format = "channels_first", T = 10, train_argv = True, quant_config = None, idx_split=0, n_truncate=32, total_num_files=21, subsample_prop=1.0, thresh_idx_path=False, stride=1, mat_type=0):
     """
     Load and split dataset according to arguments
     Assumes timeslot splits (i.e., concatenating along axis=1)
@@ -360,12 +470,21 @@ def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img
     for timeslot in range(1,T*stride+1,stride):
         batch_str = f"{dataset_str}{timeslot}_{dataset_tail}"
         print(f"--- Adding batch #{timeslot} from {batch_str} ---")
-        with h5py.File(batch_str, 'r') as f:
-            x_t = np.transpose(f[dataset_key][()], [3,2,1,0])
-            x_t_up = np.transpose(f[dataset_key_up][()], [3,2,1,0]) if type(dataset_key_up) != type(None) else None
-            f.close()
+        if mat_type == 0:
+            with h5py.File(batch_str, 'r') as f:
+                x_t = np.transpose(f[dataset_key][()], [3,2,1,0])
+                x_t_up = np.transpose(f[dataset_key_up][()], [3,2,1,0]) if type(dataset_key_up) != type(None) else None
+                f.close()
+        elif mat_type == 1:
+            mat = sio.loadmat(batch_str)
+            x_t = mat[dataset_key]
+            x_t_up = mat[dataset_key_up]
+            x_t = np.reshape(x_t, (x_t.shape[0], img_channels, img_height, img_width))
+            x_t_up = np.reshape(x_t_up, (x_t_up.shape[0], img_channels, img_height, img_width))
+        # x_val  = add_batch(x_val, mat, 'val', T, img_channels, img_height, img_width, data_format, n_truncate)
         # x_t = sio.loadmat(f"{dataset_str}{timeslot}_{dataset_tail}")[dataset_key]
-        pow_diff, pow_diff_up = load_pow_diff(diff_spec, T=timeslot)
+        if len(diff_spec) > 0:
+            pow_diff, pow_diff_up = load_pow_diff(diff_spec, T=timeslot)
         if timeslot == 1:
             # np.random.seed(1)
             data_size = x_t.shape[0] if thresh_idx_path == False else H_thresh_idx.shape[0]
@@ -386,8 +505,9 @@ def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img
         x_all = add_batch_col(x_all, x_t, img_channels, img_height, img_width, data_format, n_truncate)
         x_all_up = add_batch_col(x_all_up, x_t_up, img_channels, img_height, img_width, data_format, n_truncate) if type(dataset_key_up) != type(None) else None
 
-        pow_all = add_batch_pow(pow_all, pow_diff)
-        pow_all_up = add_batch_pow(pow_all_up, pow_diff_up) if type(dataset_key_up) != type(None) else None
+        if len(diff_spec) > 0:
+            pow_all = add_batch_pow(pow_all, pow_diff)
+            pow_all_up = add_batch_pow(pow_all_up, pow_diff_up) if type(dataset_key_up) != type(None) else None
 
     # split to train/val
     val_idx = int(x_all.shape[0]*val_split) 
@@ -444,6 +564,8 @@ def dataset_pipeline_col(debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img
     # if img_channels > 0:
     #     return data_train[:,:,:n_truncate,:], data_val[:,:,:n_truncate,:], data_test[:,:,:n_truncate,:]
     # else:
+    if len(diff_spec) == 0:
+        pow_diff_all = pow_all = None
     if type(dataset_key_up) != type(None):
         return pow_all, data_train, data_val, pow_all_up, data_train_up, data_val_up
     else:
@@ -457,10 +579,21 @@ def add_batch_col(dataset, batch, img_channels, img_height, img_width, data_form
     batch = np.expand_dims(batch, axis=1)
     if dataset is None:
         # return batch[:,:,:,:n_truncate] if img_channels > 0 else truncate_flattened_matrix(batch, img_height, img_width, n_truncate)
-        return batch[:,:,:,:n_truncate] 
+        return batch[:,:,:n_truncate,:] 
     else:
         # return np.concatenate((dataset, batch[:,:,:,:,:n_truncate]), axis=1) if img_channels > 0 else np.concatenate((dataset,truncate_flattened_matrix(batch, img_height, img_width, n_truncate)), axis=1)
         return np.concatenate((dataset, batch[:,:,:,:n_truncate,:]), axis=1) 
+
+def add_batch_full(data, batch, n_delay, n_angle, n_truncate):
+    # concatenate batch data onto end of data
+    # data/batch shape is (n_batch, T, n_delay, n_angle)
+    # Inputs:
+    # -> data = np.array for downlink
+    # -> batch = mat file to add to np.array
+    if data is None:
+        return batch[:,:,:n_truncate,:] 
+    else:
+        return np.vstack((data,batch[:,:,:n_truncate,:])) 
 
 def add_batch_pow(dataset, batch):
     # concatenate batch data along time axis 
