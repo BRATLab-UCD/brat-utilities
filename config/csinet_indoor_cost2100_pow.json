@@ -1,0 +1,8 @@
+{
+	"dataset_spec": ["/home/zyuliu/data_sharing/indoor_20slots/H_user_t", "32all.mat", "Hur_down_t1", 0.75],
+	"diff_spec": ["/home/mdelrosa/git/csinet-lstm/data/outdoor/P_diff_T"],
+	"n_delay": 32,
+	"data_format": "channels_first",
+	"T": 10,
+	"img_channels": 2
+}
