@@ -107,6 +107,136 @@ def denorm_tanh(data, meanvar_file, n_stddev=4, eps=0.01):
     data = np.arctanh(data)*n_stddev*sigma + mu
     return data
 
+### helper function: normalize mu compander 
+def renorm_muH4(data, minmax_file, link_type='down', timeslot=0, mu=1):
+    fieldnames = ['link','min','max']
+    if "csv" in minmax_file:
+        with open(minmax_file) as csv_file:
+            csv_reader = csv.DictReader(csv_file,fieldnames=fieldnames,delimiter=',')
+            for row in csv_reader:
+                if row['link']==link_type:
+                    d_min = float(row['min'])
+                    d_max = float(row['max'])
+    elif "pkl" in minmax_file:
+        with open(f"{minmax_file}", "rb") as f:
+            extrema_dict = pickle.load(f)
+            f.close()
+        extrema = extrema_dict[f"H_{link_type}_ext"]
+        if timeslot != -1:
+            d_min, d_max = np.min(extrema[0]), np.max(extrema[1]) # assume single timeslot performance
+        else:
+            d_min, d_max = extrema[0][timeslot], extrema[1][timeslot] # assume single timeslot performance
+    mu_comp = lambda x, mu: np.sign(x)*np.log(1+mu*np.abs(x)) / np.log(1+mu)
+    mu_min, mu_max = mu_comp(d_min, mu), mu_comp(d_max, mu)
+    data = 2 * ((mu_comp(data, mu) - mu_min) / (mu_max - mu_min)) - 1
+    return data
+
+### helper function: denormalize mu compander 
+def denorm_muH4(data, minmax_file, link_type='down', timeslot=0, mu=1):
+    fieldnames = ['link','min','max']
+    if "csv" in minmax_file:
+        with open(minmax_file) as csv_file:
+            csv_reader = csv.DictReader(csv_file,fieldnames=fieldnames,delimiter=',')
+            for row in csv_reader:
+                if row['link']==link_type:
+                    d_min = float(row['min'])
+                    d_max = float(row['max'])
+    elif "pkl" in minmax_file:
+        with open(f"{minmax_file}", "rb") as f:
+            extrema_dict = pickle.load(f)
+            f.close()
+        extrema = extrema_dict[f"H_{link_type}_ext"]
+        if timeslot != -1:
+            d_min, d_max = np.min(extrema[0]), np.max(extrema[1]) # assume single timeslot performance
+        else:
+            d_min, d_max = extrema[0][timeslot], extrema[1][timeslot] # assume single timeslot performance
+    mu_comp = lambda x, mu: np.sign(x)*np.log(1+mu*np.abs(x)) / np.log(1+mu)
+    mu_inv = lambda x, mu: np.sign(x)*((1+mu)**np.abs(x)-1) / mu
+    mu_min, mu_max = mu_comp(d_min, mu), mu_comp(d_max, mu)
+    data = (data+1)/2*(mu_max-mu_min)+mu_min
+    data = mu_inv(data, mu)
+    return data
+
+### helper function: normalize spherical + mu compander 
+def renorm_sphmuH4(data, minmax_file, t1_power_file, link_type='down', timeslot=0, mu=1, thresh_idx_path=False):
+    # spherical norm
+    with open(f"{t1_power_file}.pkl", "rb") as f:
+        batch_power = pickle.load(f)
+        f.close()
+    link_power = batch_power[f"pow_{link_type}"]
+    if thresh_idx_path != False:
+        thresh_idx = np.squeeze(sio.loadmat(f"{thresh_idx_path}")["i_percent"]) - 1 # subtract one from matlab idx
+        print(f"thresh_idx.shape: {thresh_idx.shape}\nthresh_idx: {thresh_idx}")
+        link_power = link_power[thresh_idx]
+    data = np.reshape(np.reshape(data, (data.shape[0], -1)) / link_power[:,None], data.shape)
+
+    # load minmax
+    fieldnames = ['link','min','max']
+    if "csv" in minmax_file:
+        with open(minmax_file) as csv_file:
+            csv_reader = csv.DictReader(csv_file,fieldnames=fieldnames,delimiter=',')
+            for row in csv_reader:
+                if row['link']==link_type:
+                    d_min = float(row['min'])
+                    d_max = float(row['max'])
+    elif "pkl" in minmax_file:
+        with open(f"{minmax_file}", "rb") as f:
+            extrema_dict = pickle.load(f)
+            f.close()
+        extrema = extrema_dict[f"H_{link_type}_ext"]
+        if timeslot != -1:
+            d_min, d_max = np.min(extrema[0]), np.max(extrema[1]) # assume single timeslot performance
+        else:
+            d_min, d_max = extrema[0][timeslot], extrema[1][timeslot] # assume single timeslot performance
+
+    # mu law companding
+    mu_comp = lambda x, mu: np.sign(x)*np.log(1+mu*np.abs(x)) / np.log(1+mu)
+    mu_min, mu_max = mu_comp(d_min, mu), mu_comp(d_max, mu)
+    data = 2 * ((mu_comp(data, mu) - mu_min) / (mu_max - mu_min)) - 1
+    return data
+
+### helper function: denormalize spherical + mu compander 
+def denorm_sphmuH4(data, minmax_file, t1_power_file, link_type='down', timeslot=0, mu=1, thresh_idx_path=False):
+    # load minmax
+    fieldnames = ['link','min','max']
+    if "csv" in minmax_file:
+        with open(minmax_file) as csv_file:
+            csv_reader = csv.DictReader(csv_file,fieldnames=fieldnames,delimiter=',')
+            for row in csv_reader:
+                if row['link']==link_type:
+                    d_min = float(row['min'])
+                    d_max = float(row['max'])
+    elif "pkl" in minmax_file:
+        with open(f"{minmax_file}", "rb") as f:
+            extrema_dict = pickle.load(f)
+            f.close()
+        extrema = extrema_dict[f"H_{link_type}_ext"]
+        if timeslot != -1:
+            d_min, d_max = np.min(extrema[0]), np.max(extrema[1]) # assume single timeslot performance
+        else:
+            d_min, d_max = extrema[0][timeslot], extrema[1][timeslot] # assume single timeslot performance
+
+    # mu law companding
+    mu_comp = lambda x, mu: np.sign(x)*np.log(1+mu*np.abs(x)) / np.log(1+mu)
+    mu_inv = lambda x, mu: np.sign(x)*((1+mu)**np.abs(x)-1) / mu
+    mu_min, mu_max = mu_comp(d_min, mu), mu_comp(d_max, mu)
+    data = (data+1)/2*(mu_max-mu_min)+mu_min
+    data = mu_inv(data, mu)
+
+    # spherical norm
+    with open(f"{t1_power_file}.pkl", "rb") as f:
+        batch_power = pickle.load(f)
+        f.close()
+    link_power = batch_power[f"pow_{link_type}"]
+    if thresh_idx_path != False:
+        thresh_idx = np.squeeze(sio.loadmat(f"{thresh_idx_path}")["i_percent"]) - 1 # subtract one from matlab idx
+        print(f"thresh_idx.shape: {thresh_idx.shape}\nthresh_idx: {thresh_idx}")
+        link_power = link_power[thresh_idx]
+    temp = np.reshape(data, (data.shape[0], -1)) * link_power[:, None]
+    data = np.reshape(temp, data.shape)
+
+    return data
+
 ### helper function: denormalize H4 with spherical normalization
 def denorm_sphH4(data, minmax_file, t1_power_file, batch_num, link_type='down', timeslot=0, thresh_idx_path=False):
     # iterate through batches, denormalize based on extrema of given timeslot
