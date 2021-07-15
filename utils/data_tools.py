@@ -6,6 +6,27 @@ import scipy.io as sio
 from .unpack_json import get_keys_from_json
 # from QuantizeData import quantize 
 
+from torch.utils.data import Dataset
+
+class CSIDataset(Dataset):
+	"""
+	Dataset object for channel state information data. If provided, applies random transforms
+	"""
+	def __init__(self, data, transform=None, device="cpu"):
+		# TODO: split individual samples to individual files; load using torch loader
+		# TODO: assert input data is torch tensor?
+		self.data = data.to(device)
+		self.transform = transform
+
+	def __len__(self):
+		return self.data.size(0)
+
+	def __getitem__(self, idx):
+		sample = self.data[idx,:]
+		if self.transform:
+			sample = self.transform(sample)
+		return sample # TODO: does this need to be a tuple? possibly due to "aux" input (side info, uplink, etc)
+
 # TODO: write this, if useful
 # def make_dummy_data(N, n_delay=32, n_angle=32, n_channels=2, data_format="channels_first"):
 #     """ make dummy CSI data for proving out different functions """
