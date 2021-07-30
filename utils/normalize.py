@@ -253,3 +253,110 @@ def get_t1_col_mag(dataset_spec, outpath, stride=1, T=10, mat_type=0, img_channe
     with open(f"{outpath}/H_timeslot_extrema_mag.pkl", "wb") as f:
         pickle.dump(extrema_dict, f)
         f.close()
+
+
+def get_t1_pow_Kusers(dataset_spec, outpath, n_batch=10, K=2, T=10, mat_type=0, img_channels=2, img_height=32, img_width=32, batches=None):
+    # get extrema for minmax/spherical normalization 
+    # iterate through timeslots, store:
+    # 1. running min and max of each timeslot
+    assert(len(dataset_spec) == 5)
+    dataset_str, dataset_tail, key_down, key_up, val_split = dataset_spec
+
+    H_down_min = np.zeros((K,T))
+    H_down_max = np.zeros((K,T))
+    H_sph_down_min = np.zeros((K,T))
+    H_sph_down_max = np.zeros((K,T))
+    H_up_min = np.zeros((K,T))
+    H_up_max = np.zeros((K,T))
+    H_sph_up_min = np.zeros((K,T))
+    H_sph_up_max = np.zeros((K,T))
+
+    batches = range(1,n_batch+1) if type(batches) is type(None) else batches
+    for batch in batches:
+        batch_str = f"{dataset_str}{batch}_{dataset_tail}"
+        if mat_type == 0:
+            print(f"--- Adding batch #{batch} from {batch_str} ---")
+            with h5py.File(batch_str, 'r') as f:
+                x_t = np.transpose(f[key_down][()], [3,2,1,0])
+                x_t_u = np.transpose(f[key_up][()], [3,2,1,0])
+                f.close()
+        elif mat_type == 1:
+            mat = sio.loadmat(batch_str)
+            x_t = mat[key_down]
+            x_t = np.reshape(x_t, (x_t.shape[0], img_channels, img_height, img_width))
+            x_t_u = mat[key_up]
+            x_t_u = np.reshape(x_t_u, (x_t_u.shape[0], img_channels, img_height, img_width))
+        elif mat_type == 2:
+            down_str = f"{dataset_str}{batch}_down{dataset_tail}"
+            print(f"--- Adding batch #{batch} from {down_str} ---")
+            mat = sio.loadmat(down_str)
+            x_t = mat[key_down]
+            x_t = np.reshape(x_t, (x_t.shape[0], K, T, img_height, img_width))
+            x_t = np.fft.ifft(x_t, axis=3)
+            up_str = f"{dataset_str}{batch}_up{dataset_tail}"
+            print(f"--- Adding batch #{batch} from {up_str} ---")
+            mat = sio.loadmat(up_str)
+            x_t_u = mat[key_up]
+            x_t_u = np.reshape(x_t_u, (x_t.shape[0], K, T, img_height, img_width))
+            x_t_u = np.fft.ifft(x_t_u, axis=3)
+        else:
+            print("--- Unrecognized mat_type ---")
+            return None
+
+        if batch == 1:
+            samples, K, T, n_delay, n_angle = x_t.shape
+            all_down_pow = np.zeros((samples*n_batch,K))
+            all_up_pow = np.zeros((samples*n_batch,K))
+        x_t = np.concatenate([np.expand_dims(np.real(x_t), axis=3), np.expand_dims(np.imag(x_t), axis=3)], axis=3)
+        x_t_u = np.concatenate([np.expand_dims(np.real(x_t_u), axis=3), np.expand_dims(np.imag(x_t_u), axis=3)], axis=3)
+
+        # iterate over each timeslot, and calculate extrema per timeslot
+
+        for t in range(T):
+            # minmax
+            x_down_t = x_t[:,:,t,:,:,:]
+            x_up_t = x_t_u[:,:,t,:,:,:]
+
+            # sph
+            x_down_flat = np.reshape(x_down_t, (x_down_t.shape[:2])+(-1,))
+            x_up_flat = np.reshape(x_up_t, (x_up_t.shape[:2])+(-1,))
+            if t == 0:
+                x_down_pow = np.sqrt(np.sum(x_down_flat*x_down_flat, axis=2))
+                x_up_pow = np.sqrt(np.sum(x_up_flat*x_up_flat, axis=2))
+                all_down_pow[(batch-1)*samples:batch*samples,:] = x_down_pow
+                all_up_pow[(batch-1)*samples:batch*samples,:] = x_up_pow
+            for k in range(K):
+                H_down_min[k,t] = np.min([np.min(x_down_t[:,k,:]), H_down_min[k,t]])
+                H_down_max[k,t] = np.max([np.max(x_down_t[:,k,:]), H_down_max[k,t]])
+                H_up_min[k,t] = np.min([np.min(x_up_t[:,k,:]), H_up_min[k,t]])
+                H_up_max[k,t] = np.max([np.max(x_up_t[:,k,:]), H_up_max[k,t]])
+                x_sph_down = x_down_flat[:,k,:] / x_down_pow[:,k,None]
+                x_sph_up   = x_up_flat[:,k,:] / x_up_pow[:,k,None]
+                H_sph_down_min[k,t] = np.min([np.min(x_sph_down), H_sph_down_min[k,t]])
+                H_sph_down_max[k,t] = np.max([np.max(x_sph_down), H_sph_down_max[k,t]])
+                H_sph_up_min[k,t] = np.min([np.min(x_sph_up), H_sph_up_min[k,t]])
+                H_sph_up_max[k,t] = np.max([np.max(x_sph_up), H_sph_up_max[k,t]])
+                print(f"k={k} - t={t} - H_down_min: {H_down_min[k,t]} - H_down_max: {H_down_max[k,t]} - H_sph_down_min: {H_sph_down_min[k,t]} - H_sph_down_max: {H_sph_down_max[k,t]}")
+                print(f"k={k} - t={t} - H_up_min: {H_up_min[k,t]} - H_up_max: {H_up_max[k,t]} - H_sph_up_min: {H_sph_up_min[k,t]} - H_sph_up_max: {H_sph_up_max[k,t]}")
+
+    for i in range(T):
+        for k in range(K):
+            print(f"t{i+1} k={k+1} - down: pre_min: {H_down_min[k,i]} - pre_max: {H_down_max[k,i]} - sph_min={H_sph_down_min[k,i]} - sph_max={H_sph_down_max[k,i]}")
+            print(f"t{i+1} k={k+1} - up: pre_min: {H_up_min[k,i]} - pre_max: {H_up_max[k,i]} - sph_min={H_sph_up_min[k,i]} - sph_max={H_sph_up_max[k,i]}")
+
+    pickle_dict = {"pow_down": all_down_pow, "pow_up": all_up_pow}
+    with open(f"{outpath}/H_t1_power.pkl", "wb") as f:
+        pickle.dump(pickle_dict, f)
+        f.close()
+
+    # spherical norm dict
+    extrema_dict = {"H_down_ext": [H_sph_down_min, H_sph_down_max], "H_up_ext": [H_sph_up_min, H_sph_up_max]}
+    with open(f"{outpath}/H_timeslot_extrema_sph.pkl", "wb") as f:
+        pickle.dump(extrema_dict, f)
+        f.close()
+
+    # minmax norm dict
+    extrema_dict_pre = {"H_down_ext": [H_down_min, H_down_max], "H_up_ext": [H_up_min, H_up_max]}
+    with open(f"{outpath}/H_timeslot_extrema_pre.pkl", "wb") as f:
+        pickle.dump(extrema_dict_pre, f)
+        f.close()
