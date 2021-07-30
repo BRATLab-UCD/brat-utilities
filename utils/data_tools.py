@@ -307,6 +307,80 @@ def dataset_pipeline_full(batch_num, batch_offset, debug_flag, aux_bool, dataset
     return [pow_all, data_train, data_val]
     # return [pow_all, data_train, data_val, x_train_full, x_val_full]
 
+def dataset_pipeline_Kusers(batch_num, batch_offset, dataset_spec, K = 2, img_channels = 2, img_height = 32, img_width = 32, T = 10, train_argv = True, n_truncate=32, mode="full"):
+    """
+    Load and split dataset according to arguments
+    Assumes batch-wise splits (i.e., concatenating along axis=0)
+    Assumes full CSI matrices (no truncation)
+    Assumes K users for distributed channel estimation/precoding
+    mode -> "full" returns non-truncated matrices
+         -> "truncate" returns truncated matrices
+    Returns: [pow_diff, data_train, data_val]
+    """
+
+    # x_train = x_val = x_train_full = x_val_full = None
+    # x_all = x_all_full = pow_all = None
+    x_all_down = pow_all_down = x_all_up = pow_all_up = None
+
+    assert(len(dataset_spec) == 5)
+    dataset_str, dataset_tail, dataset_key_down, dataset_key_up, val_split = dataset_spec
+
+    assert(mode in ["truncate", "full"])
+    # target_key = dataset_key if mode == "truncate" else dataset_full_key
+
+    for batch in range(1,batch_num+1):
+        down_str = f"{dataset_str}{batch}_down{dataset_tail}"
+        print(f"--- Adding batch #{batch} from {down_str} ---")
+        mat = sio.loadmat(down_str)
+        x_t = mat[dataset_key_down]
+        x_t = np.reshape(x_t, (x_t.shape[0], K, T, img_height, img_width))
+        x_t = np.fft.ifft(x_t, axis=3)
+        up_str = f"{dataset_str}{batch}_up{dataset_tail}"
+        print(f"--- Adding batch #{batch} from {up_str} ---")
+        mat = sio.loadmat(up_str)
+        x_t_u = mat[dataset_key_up]
+        x_t_u = np.reshape(x_t_u, (x_t.shape[0], K, T, img_height, img_width))
+        x_t_u = np.fft.ifft(x_t_u, axis=3)
+
+        x_all_down = add_batch_full_Kusers(x_all_down, x_t, img_height, img_width, n_truncate)
+        x_all_up = add_batch_full_Kusers(x_all_up, x_t_u, img_height, img_width, n_truncate)
+
+    # split to train/val
+    val_idx = int(x_all_down.shape[0]*val_split) 
+    x_down_train = x_all_down[:val_idx,:]
+    x_down_val = x_all_down[val_idx:,:]
+    x_up_train = x_all_up[:val_idx,:]
+    x_up_val = x_all_up[val_idx:,:]
+
+    data_down_list = [x_down_train, x_down_val]
+    data_up_list = [x_up_train, x_up_val]
+    data_strs = ["x_train", "x_val"]
+    str_link_list = ["downlink", "uplink"]
+    for data_list, str_link in zip([data_down_list, data_up_list], str_link_list):
+        for data_i, str_i in zip(data_list, data_strs):
+            print(f"-> {str_link} - {str_i}.shape: {data_i.shape}")
+
+    # if aux_bool and mode == "truncate":
+    #     if train_argv:
+    #         aux_down_train = np.zeros((len(x_train),M_1))
+    #         data_train = [aux_train, x_train]
+    #     aux_val = np.zeros((len(x_val),M_1)).astype('float32')
+    #     data_val = [aux_val, x_val]
+    # else:
+    #     data_train = x_train
+    #     data_val = x_val
+
+    # T = x_all_down.shape[2]
+    # for batch in range(1,batch_num+1):
+    #     print(f"--- Adding pow #{batch} using {diff_spec[0]}{batch}.mat ---")
+    #     pow_diff_down, pow_diff_up = load_pow_diff(diff_spec, T=T)
+    #     pow_all_down = add_batch_pow(pow_all_down, pow_diff_down, axis=0)
+    #     pow_all_up = add_batch_pow(pow_all_up, pow_diff_up, axis=0)
+
+    # # TODO: get rid of this once we are using all batches
+    # pow_all = pow_all[:x_all_down.shape[0]]
+    return [x_down_train, x_down_val, x_up_train, x_up_val]
+
 def dataset_pipeline(batch_num, debug_flag, aux_bool, dataset_spec, M_1, img_channels = 2, img_height = 32, img_width = 32, data_format = "channels_first", T = 10, train_argv = True,  merge_val_test = True, quant_config = None, idx_split=0, n_truncate=32, total_num_files=21):
     """
     Load and split dataset according to arguments
@@ -616,16 +690,29 @@ def add_batch_full(data, batch, n_delay, n_angle, n_truncate):
     else:
         return np.vstack((data,batch[:,:,:n_truncate,:])) 
 
-def add_batch_pow(dataset, batch):
+def add_batch_full_Kusers(data, batch, n_delay, n_angle, n_truncate):
+    # concatenate batch data onto end of data
+    # data/batch shape is (n_batch, T, n_delay, n_angle)
+    # Inputs:
+    # -> data = np.array for downlink
+    # -> batch = mat file to add to np.array
+    if data is None:
+        return batch[:,:,:,:n_truncate,:] 
+    else:
+        return np.vstack((data,batch[:,:,:,:n_truncate,:])) 
+
+def add_batch_pow(dataset, batch, concat_axis=1):
     # concatenate batch data along time axis 
     # Inputs:
     # -> dataset = np.array for downlink
     # -> batch = mat file to add to np.array
-    batch = np.expand_dims(batch, axis=1)
+    # -> concat_axis = concatenation axis; only use if > 0
+    if concat_axis != 0:
+        batch = np.expand_dims(batch, axis=concat_axis)
     if dataset is None:
         return batch
     else:
-        return np.concatenate((dataset, batch), axis=1) 
+        return np.concatenate((dataset, batch), axis=concat_axis) 
 
 def load_pow_diff(diff_spec,T=1):
     # TODO: load data for T > 1
@@ -633,10 +720,10 @@ def load_pow_diff(diff_spec,T=1):
     # we skip i in [0,1,2] when processing the loaded mat_dict
     mat_dict = sio.loadmat(f"{diff_spec[0]}{T}.mat")
     for i, (key, val) in enumerate(mat_dict.items()):
-        if i == 3:
+        if i == 3: # magic number
             pow_diff_down = mat_dict[key]
             pow_diff_up = None
-        if i == 4:
+        if i == 4: # magic number
             pow_diff_up = mat_dict[key]
     return [pow_diff_down, None] if type(pow_diff_up) == type(None) else [pow_diff_down, pow_diff_up]
 
