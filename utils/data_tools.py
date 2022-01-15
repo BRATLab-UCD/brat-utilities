@@ -1,12 +1,28 @@
 # data_tools.py
 # functions for importing/manipulating data for training/validation
+import torch
 import numpy as np
+import pickle as pkl
 import h5py
 import scipy.io as sio
 from .unpack_json import get_keys_from_json
 # from QuantizeData import quantize 
 
 from torch.utils.data import Dataset
+from tqdm import tqdm
+
+class DatasetToDevice(Dataset):
+    def __init__(self, data, length, device):
+        self.data = data
+        self.len = length
+        self.device = device
+
+    def __getitem__(self, index):
+        sample_real, sample_imag = torch.Tensor(torch.real(self.data[index, :])).float(), torch.Tensor(torch.imag(self.data[index, :])).float()
+        return (sample_real.to(self.device), sample_imag.to(self.device))
+        
+    def __len__(self):
+        return self.len
 
 class CSIDataset(Dataset):
 	"""
@@ -238,7 +254,7 @@ def dataset_pipeline_full_batchwise(i_batch, batch_offset, debug_flag, aux_bool,
     return [pow_all, data_t, x_all_full]
     # return [pow_all, data_train, data_val, x_train_full, x_val_full]
 
-def dataset_pipeline_full(batch_num, batch_offset, debug_flag, aux_bool, dataset_spec, diff_spec, M_1, img_channels = 2, img_height = 32, img_width = 32, T = 10, train_argv = True, n_truncate=32, mode="full"):
+def dataset_pipeline_p2d(batch_num, batch_offset, batch_size, dataset_spec, t_offset=0, img_height = 32, img_width = 32, T = 10):
     """
     Load and split dataset according to arguments
     Assumes batch-wise splits (i.e., concatenating along axis=0)
@@ -247,6 +263,61 @@ def dataset_pipeline_full(batch_num, batch_offset, debug_flag, aux_bool, dataset
          -> "truncate" returns truncated matrices
     Returns: [pow_diff, data_train, data_val]
     """
+    print(f"=== dataset_pipeline_full with T={T} timeslots, t_offset={t_offset} ===")
+
+    assert(len(dataset_spec) == 5)
+    dataset_str, dataset_key, dataset_p2d_key, dataset_pow_key, val_split = dataset_spec
+
+    target_key = dataset_key 
+
+    x = np.zeros((batch_num*batch_size, T, img_height, img_width), dtype="complex")
+    x_p2d = np.zeros((batch_num*batch_size, T, img_height, img_width), dtype="complex")
+    pow_diff = np.zeros((batch_num*batch_size, T), dtype="complex")
+    for batch in tqdm(range(batch_num), desc="Loading batches"):
+    # for batch in range(1,batch_num+1):
+        true_batch = 1 + batch + batch_offset
+        batch_str = f"{dataset_str}{true_batch}_bs{batch_size}.pkl"
+        with open(batch_str, 'rb') as f:
+            pkl_dict = pkl.load(f)
+            x_t = pkl_dict[dataset_key]
+            x_t_p2d = pkl_dict[dataset_p2d_key]
+            pow_diff_t = pkl_dict[dataset_pow_key]
+            f.close()
+        # truncate along timeslot axis
+        t_i, t_e = t_offset, t_offset+T
+        i_s = batch*batch_size
+        i_e = i_s + batch_size
+        x[i_s:i_e,:,:,:] = x_t[:,t_i:t_e,:,:]
+        x_p2d[i_s:i_e,:,:,:] = x_t_p2d[:,t_i:t_e,:,:]
+        pow_diff[i_s:i_e,:] = pow_diff_t[:,t_i:t_e]
+
+    # split to train/val
+    val_idx = int(x.shape[0]*val_split) 
+    x_train = x[:val_idx,:,:,:]
+    x_val = x[val_idx:,:,:,:]
+    x_train_p2d = x_p2d[:val_idx,:,:,:]
+    x_val_p2d = x_p2d[val_idx:,:,:,:]
+    out_dict = {
+        "x_train": x_train,
+        "x_val": x_val,
+        "x_train_p2d": x_train_p2d,
+        "x_val_p2d": x_val_p2d,
+        "pow_diff": pow_diff
+    }
+
+    return out_dict
+    # return [pow_all, data_train, data_val, x_train_full, x_val_full]
+
+def dataset_pipeline_full(batch_num, batch_offset, debug_flag, aux_bool, dataset_spec, diff_spec, M_1, t_offset=0, img_channels = 2, img_height = 32, img_width = 32, T = 10, train_argv = True, n_truncate=32, mode="full", return_pow=True):
+    """
+    Load and split dataset according to arguments
+    Assumes batch-wise splits (i.e., concatenating along axis=0)
+    Assumes dataset_full_key, indicating presence of full CSI matrices 
+    mode -> "full" returns non-truncated matrices
+         -> "truncate" returns truncated matrices
+    Returns: [pow_diff, data_train, data_val]
+    """
+    print(f"=== dataset_pipeline_full with T={T} timeslots, t_offset={t_offset} ===")
 
     # x_train = x_val = x_train_full = x_val_full = None
     # x_all = x_all_full = pow_all = None
@@ -268,18 +339,17 @@ def dataset_pipeline_full(batch_num, batch_offset, debug_flag, aux_bool, dataset
             # x_t_full = np.transpose(f[dataset_full_key][()], [3,2,1,0]) if type(dataset_full_key) != type(None) else None
             f.close()
         # def add_batch_full(data, batch, n_delay, n_angle, n_truncate):
-        x_all = add_batch_full(x_all, x_t, img_height, img_width, n_truncate)
+        # truncate along timeslot axis
+        t_i, t_e = t_offset, t_offset+T
+        x_t = x_t[:,t_i:t_e,:,:]
+        x_all = add_batch_full(x_all, x_t, img_height, img_width, n_truncate, batch_num, batch)
         # x_all_full = add_batch_full(x_all_full, x_t_full, img_height, img_width, x_t_full.shape[2])
 
     # split to train/val
     val_idx = int(x_all.shape[0]*val_split) 
     x_train = x_all[:val_idx,:,:,:]
     x_val = x_all[val_idx:,:,:,:]
-    # x_train_full = x_all_full[:val_idx,:,:,:]
-    # x_val_full = x_all_full[val_idx:,:,:,:]
 
-    # data_list = [x_train, x_val, x_train_full, x_val_full]
-    # data_strs = ["x_train", "x_val", "x_train_full", "x_val_full"]
     data_list = [x_train, x_val]
     data_strs = ["x_train", "x_val"]
     for data_i, str_i in zip(data_list, data_strs):
@@ -295,14 +365,17 @@ def dataset_pipeline_full(batch_num, batch_offset, debug_flag, aux_bool, dataset
         data_train = x_train
         data_val = x_val
 
-    T = x_all.shape[1]
-    for timeslot in range(1,T+1):
-        print(f"--- Adding pow #{timeslot} using {diff_spec[0]}{timeslot}.mat ---")
-        pow_diff, pow_diff_up = load_pow_diff(diff_spec, T=timeslot)
-        pow_all = add_batch_pow(pow_all, pow_diff)
+    if return_pow:
+        T = x_all.shape[1]
+        for timeslot in range(1,T+1):
+            print(f"--- Adding pow #{timeslot} using {diff_spec[0]}{timeslot}.mat ---")
+            pow_diff, pow_diff_up = load_pow_diff(diff_spec, T=timeslot)
+            pow_all = add_batch_pow(pow_all, pow_diff)
 
-    # TODO: get rid of this once we are using all batches
-    pow_all = pow_all[:x_all.shape[0]]
+        # TODO: get rid of this once we are using all batches
+        pow_all = pow_all[:x_all.shape[0]]
+    else:
+        pow_all = None
     
     return [pow_all, data_train, data_val]
     # return [pow_all, data_train, data_val, x_train_full, x_val_full]
@@ -679,16 +752,23 @@ def add_batch_col(dataset, batch, img_channels, img_height, img_width, data_form
         # return np.concatenate((dataset, batch[:,:,:,:,:n_truncate]), axis=1) if img_channels > 0 else np.concatenate((dataset,truncate_flattened_matrix(batch, img_height, img_width, n_truncate)), axis=1)
         return np.concatenate((dataset, batch[:,:,:,:n_truncate,:]), axis=1) 
 
-def add_batch_full(data, batch, n_delay, n_angle, n_truncate):
+def add_batch_full(data, batch, n_delay, n_angle, n_truncate, batch_num, batch_idx):
     # concatenate batch data onto end of data
     # data/batch shape is (n_batch, T, n_delay, n_angle)
     # Inputs:
     # -> data = np.array for downlink
     # -> batch = mat file to add to np.array
-    if data is None:
-        return batch[:,:,:n_truncate,:] 
-    else:
-        return np.vstack((data,batch[:,:,:n_truncate,:])) 
+    batch_size = batch.shape[0]
+    if data is None: 
+        data_shape = (batch_size*batch_num,)+batch.shape[1:]
+        data = np.zeros(data_shape, dtype=batch.dtype) # preallocate data
+    idx_s = batch_idx * batch_size
+    idx_e = idx_s + batch_size
+    data[idx_s:idx_e,:] = batch
+    return data
+        # return batch[:,:,:n_truncate,:] 
+    # else:
+        # return np.vstack((data,batch[:,:,:n_truncate,:])) 
 
 def add_batch_full_Kusers(data, batch, n_delay, n_angle, n_truncate):
     # concatenate batch data onto end of data
