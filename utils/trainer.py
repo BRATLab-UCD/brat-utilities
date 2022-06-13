@@ -324,6 +324,10 @@ def save_checkpoint_history(checkpoint, history, optimizer, dir=".", network_nam
     torch.save(optimizer_state, "{}/{}-optimizer.pt".format(dir,network_name))
     torch.save(checkpoint["latest_model"], "{}/{}-model.pt".format(dir,network_name))
 
+def save_scheduler(scheduler, dir=".", network_name="network_name"):
+    scheduler_state = copy.deepcopy(scheduler.state_dict())
+    torch.save(scheduler_state, "{}/{}-scheduler.pt".format(dir,network_name))
+
 def load_checkpoint_history(dir, model, optimizer_obj=optim.Adam, network_name="network_name"):
     # save checkpoint, history, optimizer from training
     optimizer = optimizer_obj(model.parameters())
