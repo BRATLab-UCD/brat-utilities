@@ -238,7 +238,7 @@ def denorm_sphmuH4(data, minmax_file, t1_power_file, link_type='down', timeslot=
     return data
 
 ### helper function: denormalize H4 with spherical normalization
-def denorm_sphH4(data, minmax_file, t1_power_file, batch_num, link_type='down', timeslot=0, thresh_idx_path=False):
+def denorm_sphH4(data, minmax_file, t1_power_file, link_type='down', timeslot=0, thresh_idx_path=False):
     # iterate through batches, denormalize based on extrema of given timeslot
     with open(f"{minmax_file}", "rb") as f:
         extrema_dict = pickle.load(f)
@@ -260,7 +260,8 @@ def denorm_sphH4(data, minmax_file, t1_power_file, batch_num, link_type='down', 
         thresh_idx = np.squeeze(sio.loadmat(f"{thresh_idx_path}")["i_percent"]) - 1 # subtract one from matlab idx
         print(f"thresh_idx.shape: {thresh_idx.shape}\nthresh_idx: {thresh_idx}")
         link_power = link_power[thresh_idx]
-    temp = np.reshape(data, (data.shape[0], -1)) * link_power[:, None]
+    data_len = data.shape[0]
+    temp = np.reshape(data, (data.shape[0], -1)) * link_power[:data_len, None]
     data = np.reshape(temp, data.shape)
     return data
 
@@ -275,7 +276,8 @@ def renorm_sphH4(data, minmax_file, t1_power_file, link_type='down', timeslot=0,
         thresh_idx = np.squeeze(sio.loadmat(f"{thresh_idx_path}")["i_percent"]) - 1 # subtract one from matlab idx
         print(f"thresh_idx.shape: {thresh_idx.shape}\nthresh_idx: {thresh_idx}")
         link_power = link_power[thresh_idx]
-    data = np.reshape(np.reshape(data, (data.shape[0], -1)) / link_power[:,None], data.shape)
+    data_len = data.shape[0]
+    data = np.reshape(np.reshape(data, (data.shape[0], -1)) / link_power[:data_len,None], data.shape)
     # perform minmax scaling on estimates
     with open(f"{minmax_file}", "rb") as f:
         extrema_dict = pickle.load(f)
