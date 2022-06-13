@@ -12,8 +12,9 @@ class SoftQuantize(torch.nn.Module):
         super(SoftQuantize, self).__init__()
         self.sigma_trainable = sigma_trainable
         # self.sigma = torch.nn.Parameter(data=torch.Tensor([sigma]).to(device), requires_grad=True) if sigma_trainable else sigma.to(device)
+        self.sigma_init = sigma
         self.sigma = sigma
-        self.hard_sigma = 1e6
+        self.hard_sigma = hard_sigma
         self.r = r
         self.L = L # num centers
         self.m = m # dim of centers
@@ -22,14 +23,18 @@ class SoftQuantize(torch.nn.Module):
         self.sigma_eps = 1e-4
         self.quant_mode = 0 # 0 = pass through (no quantization), 1 = soft quantization, 2 = return softmax outputs, 3 = hard quantization with self.hard_sigma
         self.q_hot_template = torch.zeros(bs, self.n_features, self.L).to(device)
+        self.device = device
         
     def init_centers(self, c):
-        self.c = torch.nn.Parameter(data=c, requires_grad=True)
+        self.c = torch.nn.Parameter(data=c, requires_grad=True).to(self.device)
         self.quant_mode = 1
 
     def forward(self, x):
         """
         Take in latent features z, return soft assignment to clusters
+        behavior depends on quant_mode:
+        -> 0 (default): no quantization
+        -> 1: soft quantization with self.sigma
         """
         b = x.shape[0]
         if self.quant_mode == 0:
@@ -61,6 +66,7 @@ class SoftQuantizeMCR(SoftQuantize):
         """
         SoftQuantize.__init__(self, *args, **kwargs)
         self.mcr_bool = True
+        self.quant_mode = "soft"
     
     def forward(self, x):
         """
@@ -71,10 +77,7 @@ class SoftQuantizeMCR(SoftQuantize):
         b = x.shape[0]
         z = x.view(b, self.n_features, self.m, 1).repeat(1, 1, 1, self.L)
         c = self.c.view(1,1,self.m,self.L).repeat(b, self.n_features, 1, 1)
-        if self.quant_mode == 3:
-            sigma = self.hard_sigma
-        else:
-            sigma = self.sigma
+        sigma = self.hard_sigma if self.quant_mode == "hard" else self.sigma
         q = self.softmax(-sigma*torch.sum(torch.pow(z - c, 2), 2))
         c = self.c.view(1,self.m,self.L).repeat(b,1,1).transpose(2,1)
         out = torch.matmul(q, c)
