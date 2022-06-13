@@ -60,7 +60,6 @@ def get_t1_power_col(dataset_spec, outpath, stride=1, T=10, img_channels=2, img_
         H_down_min[j] = np.min(norm_down)
         H_down_max[j] = np.max(norm_down)
         print(f"H_down_min: {H_down_min[j]} - H_down_max: {H_down_max[j]} - H_down_min: {H_down_min_pre[j]} - H_down_max: {H_down_max_pre[j]}")
-
         
     for i in range(T):
         print(f"t{i+1}: sph_min={H_down_min[i]} - sph_max={H_down_max[i]} - pre_min={H_down_min_pre[i]} - pre_max={H_down_max_pre[i]}")
@@ -358,5 +357,310 @@ def get_t1_pow_Kusers(dataset_spec, outpath, n_batch=10, K=2, T=10, mat_type=0, 
     # minmax norm dict
     extrema_dict_pre = {"H_down_ext": [H_down_min, H_down_max], "H_up_ext": [H_up_min, H_up_max]}
     with open(f"{outpath}/H_timeslot_extrema_pre.pkl", "wb") as f:
+        pickle.dump(extrema_dict_pre, f)
+        f.close()
+
+def get_t1_power_full(n_batches, dataset_spec, outpath, stride=1, T=10, img_channels=2, img_height=1024, img_width=32, mat_type=0, batch_offset=0):
+    # iterate through batches, store:
+    # 1. running min and max of each timeslot
+    # 2. power for each timeslot
+    assert(len(dataset_spec) == 5)
+    dataset_str, dataset_tail, dataset_key, dataset_full_key, val_split = dataset_spec
+
+    H_down_min_pre = np.zeros(T)
+    H_down_max_pre = np.zeros(T)
+    H_down_min = np.zeros(T)
+    H_down_max = np.zeros(T)
+    H_down_f_min_pre = np.zeros(T)
+    H_down_f_max_pre = np.zeros(T)
+    H_down_f_min = np.zeros(T)
+    H_down_f_max = np.zeros(T)
+    for batch in range(n_batches):
+        true_batch = batch + batch_offset
+        batch_str = f"{dataset_str}{true_batch}{dataset_tail}"
+        print(f"--- Adding batch #{batch} from {batch_str} ---")
+        if mat_type == 0:
+            with h5py.File(batch_str, 'r') as f:
+                x_t = np.transpose(f[dataset_full_key][()], [3,2,1,0])
+                f.close()
+        elif mat_type == 1:
+            mat = sio.loadmat(batch_str)
+            x_t = mat[dataset_full_key]
+            x_t = np.reshape(x_t, (x_t.shape[0], img_channels, img_height, img_width))
+        else:
+            print("--- Unrecognized mat_type ---")
+            return None
+        if batch == 0:
+            samples, T, img_height, img_width = x_t.shape # complex data
+
+        # first, get power of first timeslot
+        # Hur_up = np.reshape(Hur_up, (samples, T, -1))
+
+        x_f = np.fft.fft(x_t.view("complex"), axis=2)
+        x_f_re = np.expand_dims(np.real(x_f.view("complex")).astype('float32'),axis=2) # real portion
+        x_f_im = np.expand_dims(np.imag(x_f.view("complex")).astype('float32'),axis=2) # imag portion
+        x_t = np.concatenate((x_f_re,x_f_im),axis=2)
+        x_t = np.reshape(x_f, (samples, T, -1))
+        pow_down_f = np.sqrt(np.sum(x_f**2, axis=2))
+
+        x_re = np.expand_dims(np.real(x_t.view("complex")).astype('float32'),axis=2) # real portion
+        x_im = np.expand_dims(np.imag(x_t.view("complex")).astype('float32'),axis=2) # imag portion
+        x_t = np.concatenate((x_re,x_im),axis=2)
+        x_t = np.reshape(x_t, (samples, T, -1))
+        pow_down = np.sqrt(np.sum(x_t**2, axis=2))
+        
+        # pow_up = np.sqrt(np.sum(H_t_up**2, axis=1))
+        pow_t1_down = pow_down[:,0]
+        print(f"pow_t1_down range: {np.min(pow_t1_down)} to {np.max(pow_t1_down)} -- pow_t1_down.shape: {pow_t1_down.shape}")
+        pow_t1_down_f = pow_down_f[:,0]
+        print(f"pow_t1_down_f range: {np.min(pow_t1_down_f)} to {np.max(pow_t1_down_f)} -- pow_t1_down.shape: {pow_t1_down_f.shape}")
+
+        # second, iterate over each timeslot, normalize by pow_t1, and calculate extrema per timeslot
+        for t in range(T):
+
+            # somehow, this might be the problem?
+            norm_down = x_t[:,t,:] / pow_t1_down[:,None]
+            norm_f_down = x_f[:,t,:] / pow_t1_down_f[:,None]
+
+            H_down_min[t] = np.min([np.min(norm_down), H_down_min[t]])
+            H_down_max[t] = np.max([np.max(norm_down), H_down_max[t]])
+            H_down_min_pre[t] = np.min([np.min(x_t[:,t,:]), H_down_min_pre[t]])
+            H_down_max_pre[t] = np.max([np.max(x_t[:,t,:]), H_down_max_pre[t]])
+            H_down_f_min[t] = np.min([np.min(norm_f_down), H_down_f_min[t]])
+            H_down_f_max[t] = np.max([np.max(norm_f_down), H_down_f_max[t]])
+            H_down_f_min_pre[t] = np.min([np.min(x_f[:,t,:]), H_down_f_min_pre[t]])
+            H_down_f_max_pre[t] = np.max([np.max(x_f[:,t,:]), H_down_f_max_pre[t]])
+            print(f"t{t+1} - H_down range: {H_down_min[t]} to {H_down_max[t]} - H_down_pre range: {H_down_min_pre[t]} to {H_down_max_pre[t]} - H_down_f_pre range: {H_down_f_min_pre[t]} to {H_down_f_max_pre[t]} - H_down_f range: {H_down_f_min[t]} to {H_down_f_max[t]}")
+
+        del x_t, x_f
+        
+    for t in range(T):
+        print(f"t{t+1}: sph_min={H_down_min[t]} - sph_max={H_down_max[t]} - pre_min={H_down_min_pre[t]} - pre_max={H_down_max_pre[t]}")
+        pickle_dict = {"pow_down": pow_down[:,t]}
+        with open(f"{outpath}/H_t{t+1}_power.pkl", "wb") as f:
+            pickle.dump(pickle_dict, f)
+            f.close()
+
+        pickle_dict = {"pow_down": pow_down_f[:,t]}
+        with open(f"{outpath}/H_t{t+1}_freq_power.pkl", "wb") as f:
+            pickle.dump(pickle_dict, f)
+            f.close()
+
+    # angle-delay - sph extrema
+    extrema_dict = {"H_down_ext": [H_down_min, H_down_max]}
+    with open(f"{outpath}/H_timeslot_extrema_sph.pkl", "wb") as f:
+        pickle.dump(extrema_dict, f)
+        f.close()
+
+    # angle-delay - minmax extrema
+    extrema_dict_pre = {"H_down_ext": [H_down_min_pre, H_down_max_pre]}
+    with open(f"{outpath}/H_timeslot_extrema_pre.pkl", "wb") as f:
+        pickle.dump(extrema_dict_pre, f)
+        f.close()
+
+    # angle-freq - sph extrema
+    extrema_dict = {"H_down_f_ext": [H_down_f_min, H_down_f_max]}
+    with open(f"{outpath}/H_timeslot_extrema_sph_freq.pkl", "wb") as f:
+        pickle.dump(extrema_dict, f)
+        f.close()
+
+    # angle-freq - minmax extrema
+    extrema_dict_pre = {"H_down_f_ext": [H_down_f_min_pre, H_down_f_max_pre]}
+    with open(f"{outpath}/H_timeslot_extrema_pre_freq.pkl", "wb") as f:
+        pickle.dump(extrema_dict_pre, f)
+        f.close()
+
+def get_timeslot_power_full(n_batches, dataset_spec, outpath, timeslot, stride=1, T=10, img_channels=2, img_height=1024, img_width=32, mat_type=0, batch_offset=0, N_truncate=0, val_prop=0.0):
+    # iterate through batches, store:
+    # 1. running min and max of single timeslot
+    # 2. power for each timeslot
+    assert(len(dataset_spec) == 5)
+    dataset_str, dataset_tail, dataset_key, dataset_full_key, val_split = dataset_spec
+
+    H_down_min_pre = 0
+    H_down_max_pre = 0
+    H_down_min = 0
+    H_down_max = 0
+    H_down_f_min_pre = 0
+    H_down_f_max_pre = 0
+    H_down_f_min = 0
+    H_down_f_max = 0
+    H_down_ta_min_pre = 0
+    H_down_ta_max_pre = 0
+    H_down_ta_min = 0
+    H_down_ta_max = 0
+
+    for batch in range(n_batches):
+        true_batch = batch + batch_offset
+        batch_str = f"{dataset_str}{true_batch}{dataset_tail}"
+        print(f"--- Adding batch #{batch} from {batch_str} ---")
+        if mat_type == 0:
+            with h5py.File(batch_str, 'r') as f:
+                x_t = np.transpose(f[dataset_full_key][()], [3,2,1,0])
+                f.close()
+        elif mat_type == 1:
+            mat = sio.loadmat(batch_str)
+            x_t = mat[dataset_full_key]
+            x_t = np.reshape(x_t, (x_t.shape[0], img_channels, img_height, img_width))
+        else:
+            print("--- Unrecognized mat_type ---")
+            return None
+        if batch == 0:
+            samples, T, img_height, img_width = x_t.shape # complex data
+
+        # slice target timeslot
+        print(f"pre-slice shape: {x_t.shape}") # should yield (batch, T, n_del, n_spa)
+        x_t = x_t[:,timeslot,:,:]
+        print(f"post-slice shape: {x_t.shape}") # should yield (batch, n_del, n_spa)
+
+        # freq-spatial domain
+        x_f = np.fft.fft(x_t.view("complex"), axis=1)
+        x_f_re = np.expand_dims(np.real(x_f.view("complex")).astype('float32'),axis=1) # real portion
+        x_f_im = np.expand_dims(np.imag(x_f.view("complex")).astype('float32'),axis=1) # imag portion
+        x_f = np.concatenate((x_f_re,x_f_im),axis=1)
+        x_f = np.reshape(x_f, (samples, -1))
+        pow_down_f = np.sqrt(np.sum(x_f**2, axis=1))
+        if batch == 0:
+            pow_down_f_acc = pow_down_f
+        else:
+            pow_down_f_acc = np.concatenate([pow_down_f_acc, pow_down_f], axis=0)
+
+        # delay-angular domain
+        x_ta = np.fft.fft(x_t.view("complex"), axis=2)
+        if N_truncate > 0:    
+            x_ta = x_ta[:,:N_truncate,:]
+        x_ta_re = np.expand_dims(np.real(x_ta.view("complex")).astype('float32'),axis=1) # real portion
+        x_ta_im = np.expand_dims(np.imag(x_ta.view("complex")).astype('float32'),axis=1) # imag portion
+        x_ta = np.concatenate((x_ta_re,x_ta_im),axis=1)
+        x_ta = np.reshape(x_ta, (samples, -1))
+        pow_down_ta = np.sqrt(np.sum(x_ta**2, axis=1))
+        if batch == 0:
+            pow_down_ta_acc = pow_down_ta
+        else:
+            pow_down_ta_acc = np.concatenate([pow_down_ta_acc, pow_down_ta], axis=0)
+
+        # delay-spatial (native)
+        x_re = np.expand_dims(np.real(x_t.view("complex")).astype('float32'),axis=1) # real portion
+        x_im = np.expand_dims(np.imag(x_t.view("complex")).astype('float32'),axis=1) # imag portion
+        x_t = np.concatenate((x_re,x_im),axis=1)
+        if N_truncate > 0:    
+            x_t = x_t[:,:N_truncate,:]
+        x_t = np.reshape(x_t, (samples, -1))
+        pow_down = np.sqrt(np.sum(x_t**2, axis=1))
+        if batch == 0:
+            pow_down_acc = pow_down
+        else:
+            pow_down_acc = np.concatenate([pow_down_acc, pow_down], axis=0)
+        
+        # pow_up = np.sqrt(np.sum(H_t_up**2, axis=1))
+        # pow_t1_down = pow_down[:,0]
+        # print(f"pow_t1_down range: {np.min(pow_t1_down)} to {np.max(pow_t1_down)} -- pow_t1_down.shape: {pow_t1_down.shape}")
+        # pow_t1_down_f = pow_down_f[:,0]
+        # print(f"pow_t1_down_f range: {np.min(pow_t1_down_f)} to {np.max(pow_t1_down_f)} -- pow_t1_down.shape: {pow_t1_down_f.shape}")
+
+        # second, iterate over each timeslot, normalize by pow_t1, and calculate extrema per timeslot
+
+        # somehow, this might be the problem?
+        norm_down = x_t / pow_down[:,None]
+        norm_f_down = x_f / pow_down_f[:,None]
+        norm_ta_down = x_ta / pow_down_ta[:,None]
+
+        H_down_min = np.min([np.min(norm_down), H_down_min])
+        H_down_max = np.max([np.max(norm_down), H_down_max])
+        H_down_min_pre = np.min([np.min(x_t), H_down_min_pre])
+        H_down_max_pre = np.max([np.max(x_t), H_down_max_pre])
+
+        H_down_f_min = np.min([np.min(norm_f_down), H_down_f_min])
+        H_down_f_max = np.max([np.max(norm_f_down), H_down_f_max])
+        H_down_f_min_pre = np.min([np.min(x_f), H_down_f_min_pre])
+        H_down_f_max_pre = np.max([np.max(x_f), H_down_f_max_pre])
+
+        H_down_ta_min = np.min([np.min(norm_ta_down), H_down_ta_min])
+        H_down_ta_max = np.max([np.max(norm_ta_down), H_down_ta_max])
+        H_down_ta_min_pre = np.min([np.min(x_ta), H_down_ta_min_pre])
+        H_down_ta_max_pre = np.max([np.max(x_ta), H_down_ta_max_pre])
+        print(f"t{timeslot+1} - H_down range: {H_down_min} to {H_down_max} - H_down_pre range: {H_down_min_pre} to {H_down_max_pre} ")
+        print(f"t{timeslot+1} - H_down_f_pre range: {H_down_f_min_pre} to {H_down_f_max_pre} - H_down_f range: {H_down_f_min} to {H_down_f_max}")
+        print(f"t{timeslot+1} - H_down_ta_pre range: {H_down_ta_min_pre} to {H_down_ta_max_pre} - H_down_ta range: {H_down_ta_min} to {H_down_ta_max}")
+
+        del x_t, x_f
+        
+    print(f"t{timeslot+1}: sph_min={H_down_min} - sph_max={H_down_max} - pre_min={H_down_min_pre} - pre_max={H_down_max_pre}")
+
+    # save power for delay-spatial domain (all)
+    pickle_dict = {"pow_down": pow_down_acc}
+    fname = f"H_t{timeslot+1}_power" if N_truncate == 0 else f"H_t{timeslot+1}_power_Nt_{N_truncate}"
+    with open(f"{outpath}/{fname}.pkl", "wb") as f:
+        pickle.dump(pickle_dict, f)
+        f.close()
+
+    # save power for delay-spatial domain (validation)
+    if val_prop > 0:
+        n_val = int(pow_down_acc.shape[0]*val_prop)
+        pickle_dict = {"pow_down": pow_down_acc[n_val:]}
+        fname = f"H_t{timeslot+1}_power" if N_truncate == 0 else f"H_t{timeslot+1}_power_Nt_{N_truncate}"
+        with open(f"{outpath}/{fname}_val.pkl", "wb") as f:
+            pickle.dump(pickle_dict, f)
+            f.close()
+
+    # save power for freq-spatial domain (all)
+    pickle_dict = {"pow_down": pow_down_f_acc}
+    with open(f"{outpath}/H_t{timeslot+1}_freq_power.pkl", "wb") as f:
+        pickle.dump(pickle_dict, f)
+        f.close()
+
+    # save power for delay-angular domain (all)
+    pickle_dict = {"pow_down": pow_down_ta_acc}
+    fname = f"H_t{timeslot+1}_delang_power" if N_truncate == 0 else f"H_t{timeslot+1}_delang_power_Nt_{N_truncate}"
+    with open(f"{outpath}/{fname}.pkl", "wb") as f:
+        pickle.dump(pickle_dict, f)
+        f.close()
+
+    # save power for delay-spatial domain (validation)
+    if val_prop > 0:
+        n_val = int(pow_down_acc.shape[0]*val_prop)
+        pickle_dict = {"pow_down": pow_down_acc[n_val:]}
+        fname = f"H_t{timeslot+1}_delang_power" if N_truncate == 0 else f"H_t{timeslot+1}_delang_power_Nt_{N_truncate}"
+        with open(f"{outpath}/{fname}_val.pkl", "wb") as f:
+            pickle.dump(pickle_dict, f)
+            f.close()
+
+    # delay-spatial - sph extrema
+    extrema_dict = {"H_down_ext": [[H_down_min], [H_down_max]]}
+    fname = "H_timeslot_extrema_sph" if N_truncate == 0 else f"H_timeslot_extrema_sph_Nt_{N_truncate}"
+    with open(f"{outpath}/{fname}.pkl", "wb") as f:
+        pickle.dump(extrema_dict, f)
+        f.close()
+
+    # delay-spatial - minmax extrema
+    extrema_dict_pre = {"H_down_ext": [[H_down_min_pre], [H_down_max_pre]]}
+    fname = "H_timeslot_extrema_pre" if N_truncate == 0 else f"H_timeslot_extrema_pre_Nt_{N_truncate}"
+    with open(f"{outpath}/{fname}.pkl", "wb") as f:
+        pickle.dump(extrema_dict_pre, f)
+        f.close()
+
+    # freq-spatial - sph extrema
+    extrema_dict = {"H_down_ext": [[H_down_f_min], [H_down_f_max]]}
+    with open(f"{outpath}/H_timeslot_extrema_sph_freq.pkl", "wb") as f:
+        pickle.dump(extrema_dict, f)
+        f.close()
+
+    # freq-spatial - minmax extrema
+    extrema_dict_pre = {"H_down_ext": [[H_down_f_min_pre], [H_down_f_max_pre]]}
+    with open(f"{outpath}/H_timeslot_extrema_pre_freq.pkl", "wb") as f:
+        pickle.dump(extrema_dict_pre, f)
+        f.close()
+
+    # delay-angular - sph extrema
+    extrema_dict = {"H_down_ext": [[H_down_ta_min], [H_down_ta_max]]}
+    fname = "H_timeslot_extrema_sph_delang" if N_truncate == 0 else f"H_timeslot_extrema_sph_delang_Nt_{N_truncate}"
+    with open(f"{outpath}/{fname}.pkl", "wb") as f:
+        pickle.dump(extrema_dict, f)
+        f.close()
+
+    # delay-angular - minmax extrema
+    extrema_dict_pre = {"H_down_ext": [[H_down_ta_min_pre], [H_down_ta_max_pre]]}
+    fname = "H_timeslot_extrema_pre_delang" if N_truncate == 0 else f"H_timeslot_extrema_pre_delang_Nt_{N_truncate}"
+    with open(f"{outpath}/{fname}.pkl", "wb") as f:
         pickle.dump(extrema_dict_pre, f)
         f.close()
