@@ -254,9 +254,10 @@ def dataset_pipeline_full_batchwise(i_batch, batch_offset, debug_flag, aux_bool,
     return [pow_all, data_t, x_all_full]
     # return [pow_all, data_train, data_val, x_train_full, x_val_full]
 
-def dataset_pipeline_p2d(batch_num, batch_offset, batch_size, dataset_spec, t_offset=0, img_height = 32, img_width = 32, T = 10):
+def dataset_pipeline_p2d(batch_num, batch_offset, batch_size, sz, D, val_split, dataset_spec, dataset_p2d_spec, t_offset=0, img_height = 32, img_width = 32, T = 10):
     """
     Load and split dataset according to arguments
+
     Assumes batch-wise splits (i.e., concatenating along axis=0)
     Assumes dataset_full_key, indicating presence of full CSI matrices 
     mode -> "full" returns non-truncated matrices
@@ -265,23 +266,33 @@ def dataset_pipeline_p2d(batch_num, batch_offset, batch_size, dataset_spec, t_of
     """
     print(f"=== dataset_pipeline_full with T={T} timeslots, t_offset={t_offset} ===")
 
-    assert(len(dataset_spec) == 5)
-    dataset_str, dataset_key, dataset_p2d_key, dataset_pow_key, val_split = dataset_spec
+    assert(len(dataset_spec) == 3)
+    dataset_str, dataset_key, dataset_pow_key = dataset_spec
+
+    assert(len(dataset_p2d_spec) == 3)
+    dataset_p2d_str, dataset_p2d_tail, dataset_p2d_key = dataset_p2d_spec
 
     target_key = dataset_key 
 
     x = np.zeros((batch_num*batch_size, T, img_height, img_width), dtype="complex")
     x_p2d = np.zeros((batch_num*batch_size, T, img_height, img_width), dtype="complex")
-    pow_diff = np.zeros((batch_num*batch_size, T), dtype="complex")
+    pow_diff = np.zeros((batch_num*batch_size, T))
     for batch in tqdm(range(batch_num), desc="Loading batches"):
     # for batch in range(1,batch_num+1):
         true_batch = 1 + batch + batch_offset
         batch_str = f"{dataset_str}{true_batch}_bs{batch_size}.pkl"
+        # ground_truth
         with open(batch_str, 'rb') as f:
             pkl_dict = pkl.load(f)
             x_t = pkl_dict[dataset_key]
-            x_t_p2d = pkl_dict[dataset_p2d_key]
             pow_diff_t = pkl_dict[dataset_pow_key]
+            f.close()
+
+        # p2d data
+        batch_str = f"{dataset_p2d_str}/D{D}/sz{sz}/{dataset_p2d_tail}{true_batch}_bs{batch_size}.pkl"
+        with open(batch_str, 'rb') as f:
+            pkl_dict = pkl.load(f)
+            x_t_p2d = pkl_dict[dataset_p2d_key]
             f.close()
         # truncate along timeslot axis
         t_i, t_e = t_offset, t_offset+T
